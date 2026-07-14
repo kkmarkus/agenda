@@ -1,11 +1,14 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { contarPorTag } from '../services/database';
+import type { RootStackParamList } from '../navigation/AppNavigator';
 
-type Props = {
-  navigation: { navigate: (tela: 'Dashboard', params: { tagFiltro: string }) => void };
-};
+// CORREÇÃO: mesmo problema das outras telas — Props simplificado próprio
+// substituído pelo tipo real de navegação.
+type Props = NativeStackScreenProps<RootStackParamList, 'Tags'>;
 
 const CORES_TAG = ['#378ADD', '#639922', '#7F77DD', '#D85A30', '#D4537E'];
 
@@ -22,17 +25,17 @@ export default function TagsScreen({ navigation }: Props) {
 
   if (tags.length === 0) {
     return (
-      <View style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         <Text style={styles.titulo}>Tags</Text>
         <Text style={styles.vazio}>
           Novas tags aparecem aqui automaticamente conforme você as usa nos eventos.
         </Text>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <Text style={styles.titulo}>Tags</Text>
       <FlatList
         data={tags}
@@ -52,7 +55,7 @@ export default function TagsScreen({ navigation }: Props) {
           </TouchableOpacity>
         )}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
