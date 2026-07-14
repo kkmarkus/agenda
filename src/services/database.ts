@@ -41,6 +41,14 @@ export function apagarRegistro(id: number): void {
 }
 
 /**
+ * Atualiza a tag de um registro já existente (usado no fluxo de edição,
+ * quando ela decide reclassificar um evento que já estava salvo).
+ */
+export function atualizarTagPorNativeId(nativeEventId: string, tag: string): void {
+  db.runSync(`UPDATE eventos SET tag = ? WHERE native_event_id = ?;`, [tag, nativeEventId]);
+}
+
+/**
  * Retorna as tags já usadas, sem repetição — alimenta o autocomplete
  * na tela de confirmação, evitando variações tipo "Universidade" vs "universidade".
  */
