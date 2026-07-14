@@ -8,19 +8,40 @@ export interface EventoExtraido {
   horaEncontrada: boolean; // se não achou hora, o formulário assume um horário padrão
 }
 
+// CORREÇÃO IMPORTANTE: o parser original usava \b (word boundary) em
+// palavras acentuadas, ex: /\bamanh[ãa]\b/i e /\b(dia|às|as|em)\b/gi.
+// Em JavaScript, \b só reconhece [A-Za-z0-9_] como "caractere de palavra" —
+// letras acentuadas (ã, á, ç, õ, etc) NÃO contam. Isso quebrava duas coisas:
+//   1. "amanhã" (a forma mais comum de digitar, com til) nunca era reconhecida
+//      como data, porque o \b depois do "ã" falhava — o app silenciosamente
+//      não extraía NENHUMA data desses textos, mesmo sendo o caso mais comum.
+//   2. "às" sobrava no título (ex: "reunião com cliente às" em vez de
+//      "reunião com cliente"), porque \bàs\b também nunca casava.
+// A correção troca \b por lookbehind/lookahead que tratam explicitamente
+// letras com acento (faixa Latin-1 À-ÿ) como "letra", então o limite de
+// palavra funciona corretamente mesmo colado em acentos.
+function comLimitesDePalavra(padrao: string, flags = 'i'): RegExp {
+  return new RegExp(`(?<![a-zA-ZÀ-ÿ])(${padrao})(?![a-zA-ZÀ-ÿ])`, flags);
+}
+
+const REGEX_HOJE = comLimitesDePalavra('hoje');
+const REGEX_AMANHA = comLimitesDePalavra('amanh[ãa]');
+const REGEX_PALAVRAS_DESCARTAVEIS = comLimitesDePalavra('dia|às|as|em', 'gi');
 const REGEX_DATA_COMPLETA = /(\d{1,2})\/(\d{1,2})\/(\d{4})/; // 27/07/2026
 const REGEX_DATA_CURTA = /(\d{1,2})\/(\d{1,2})(?!\/)/; // 27/07 (sem ano)
 const REGEX_HORA = /(\d{1,2})[:h](\d{2})?\s*h?/i; // 14h, 14:30, 14h30
 
 function extrairData(texto: string, agora: Date): { data: Date | null; trecho: string | null } {
-  if (/\bhoje\b/i.test(texto)) {
-    return { data: new Date(agora), trecho: texto.match(/\bhoje\b/i)![0] };
+  const matchHoje = texto.match(REGEX_HOJE);
+  if (matchHoje) {
+    return { data: new Date(agora), trecho: matchHoje[0] };
   }
 
-  if (/\bamanh[ãa]\b/i.test(texto)) {
+  const matchAmanha = texto.match(REGEX_AMANHA);
+  if (matchAmanha) {
     const amanha = new Date(agora);
     amanha.setDate(amanha.getDate() + 1);
-    return { data: amanha, trecho: texto.match(/\bamanh[ãa]\b/i)![0] };
+    return { data: amanha, trecho: matchAmanha[0] };
   }
 
   const completa = texto.match(REGEX_DATA_COMPLETA);
@@ -66,7 +87,7 @@ export function parseTextoLivre(texto: string, agora: Date = new Date()): Evento
   if (trechoData) titulo = titulo.replace(trechoData, '');
   if (horaInfo) titulo = titulo.replace(horaInfo.trecho, '');
   titulo = titulo
-    .replace(/\b(dia|às|as|em)\b/gi, '')
+    .replace(REGEX_PALAVRAS_DESCARTAVEIS, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 
