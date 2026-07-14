@@ -1,19 +1,24 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { buscarEventoDaAgenda, apagarEventoDaAgenda } from '../services/calendarService';
 import { listarRegistros, apagarRegistro } from '../services/database';
 import { EventoApp } from '../types/event';
+import type { RootStackParamList } from '../navigation/AppNavigator';
 
-type Props = {
-  navigation: { navigate: (tela: 'Input' | 'Tags') => void };
-  route?: { params?: { tagFiltro?: string } };
-};
+// CORREÇÃO: antes cada tela declarava seu próprio tipo de Props "simplificado",
+// desalinhado do RootStackParamList real do AppNavigator. Usando
+// NativeStackScreenProps aqui, o TypeScript passa a checar de verdade os
+// parâmetros de rota e navegação (erro de digitação em nome de tela ou
+// parâmetro esquecido vira erro de compilação, não bug em produção).
+type Props = NativeStackScreenProps<RootStackParamList, 'Dashboard'>;
 
 const LIMITE_URGENTE_HORAS = 48;
 
 export default function DashboardScreen({ navigation, route }: Props) {
-  const tagFiltro = route?.params?.tagFiltro;
+  const tagFiltro = route.params?.tagFiltro;
   const [eventos, setEventos] = useState<EventoApp[]>([]);
   const [carregando, setCarregando] = useState(true);
 
@@ -59,6 +64,34 @@ export default function DashboardScreen({ navigation, route }: Props) {
     setCarregando(false);
   }
 
+  function handleAbrirOpcoes(evento: EventoApp) {
+    // CORREÇÃO/MELHORIA: antes o long-press só oferecia apagar. Se ela
+    // errasse um horário, o único jeito de corrigir era apagar e recriar
+    // o evento do zero (perdendo, inclusive, o vínculo de tag). Agora dá
+    // pra editar o evento existente sem precisar recriá-lo.
+    Alert.alert(evento.titulo, 'O que deseja fazer com esse evento?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Editar',
+        onPress: () =>
+          navigation.navigate('Confirmar', {
+            nativeEventId: evento.nativeEventId,
+            rascunho: {
+              titulo: evento.titulo,
+              data: evento.data,
+              descricao: evento.descricao,
+              tag: evento.tag,
+            },
+          }),
+      },
+      {
+        text: 'Apagar',
+        style: 'destructive',
+        onPress: () => handleApagar(evento),
+      },
+    ]);
+  }
+
   function handleApagar(evento: EventoApp) {
     Alert.alert('Apagar evento', `Remover "${evento.titulo}" da agenda?`, [
       { text: 'Cancelar', style: 'cancel' },
@@ -77,7 +110,7 @@ export default function DashboardScreen({ navigation, route }: Props) {
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.headerRow}>
         <Text style={styles.titulo}>{tagFiltro ? tagFiltro : 'Seus eventos'}</Text>
         {!tagFiltro && (
@@ -104,7 +137,7 @@ export default function DashboardScreen({ navigation, route }: Props) {
           return (
             <TouchableOpacity
               style={[styles.card, urgente && styles.cardUrgente]}
-              onLongPress={() => handleApagar(item)}
+              onLongPress={() => handleAbrirOpcoes(item)}
             >
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitulo}>{item.titulo}</Text>
@@ -123,7 +156,7 @@ export default function DashboardScreen({ navigation, route }: Props) {
       <TouchableOpacity style={styles.botaoNovo} onPress={() => navigation.navigate('Input')}>
         <Text style={styles.botaoNovoTexto}>+</Text>
       </TouchableOpacity>
-    </View>
+    </SafeAreaView>
   );
 }
 

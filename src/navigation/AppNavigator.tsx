@@ -9,12 +9,16 @@ import TagsScreen from '../screens/TagsScreen';
 import { NovoEvento } from '../types/event';
 
 // Centraliza as telas e os parâmetros que cada uma espera receber.
-// É esse tipo que deveria substituir os "Props" simplificados usados
-// em cada tela individual, quando quiser tipagem completa de ponta a ponta.
+// Este é o tipo oficial de navegação: todas as telas usam
+// NativeStackScreenProps<RootStackParamList, 'NomeDaTela'> para tipagem
+// completa de ponta a ponta (antes cada tela tinha um "Props" simplificado
+// próprio, o que já causou divergência entre o que o navigator esperava
+// e o que cada tela declarava).
 export type RootStackParamList = {
   Dashboard: { tagFiltro?: string } | undefined;
   Input: undefined;
-  Confirmar: { rascunho: Partial<NovoEvento> };
+  // nativeEventId presente = modo edição (ConfirmScreen atualiza em vez de criar).
+  Confirmar: { rascunho: Partial<NovoEvento>; nativeEventId?: string };
   Tags: undefined;
 };
 

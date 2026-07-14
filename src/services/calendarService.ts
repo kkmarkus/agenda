@@ -25,16 +25,23 @@ async function getOrCreateCalendarId(): Promise<string> {
   const existente = calendarios.find((c) => c.title === NOME_CALENDARIO_APP);
   if (existente) return existente.id;
 
-  const defaultSource =
-    calendarios.find((c) => c.source && c.accessLevel === Calendar.CalendarAccessLevel.OWNER)
-      ?.source ?? { isLocalAccount: true, name: 'Local', type: 'LOCAL' };
-
+  // CORREÇÃO: a versão anterior tentava reaproveitar a "source" de um
+  // calendário existente (ex: conta Google) e montava um sourceId a partir
+  // dela, mas caía num fallback `{ isLocalAccount: true, ... }` sem `id` —
+  // ou seja, `sourceId: (defaultSource as any).id` virava `undefined` sempre
+  // que o aparelho não tinha nenhum calendário OWNER (comum logo após só
+  // conceder a permissão), quebrando a criação do calendário no Android.
+  //
+  // Como o app é Android-only, seguimos o padrão recomendado pela própria
+  // documentação do expo-calendar para Android: usar isLocalAccount e não
+  // depender de nenhuma conta externa (o campo `type: SourceType.LOCAL` é
+  // exigido pela tipagem do pacote, mas ignorado pelo Android nesse caso).
+  // Isso evita esse ponto de falha.
   const novoId = await Calendar.createCalendarAsync({
     title: NOME_CALENDARIO_APP,
     color: '#378ADD',
     entityType: Calendar.EntityTypes.EVENT,
-    source: defaultSource,
-    sourceId: (defaultSource as any).id,
+    source: { isLocalAccount: true, name: NOME_CALENDARIO_APP, type: Calendar.SourceType.LOCAL },
     name: NOME_CALENDARIO_APP,
     ownerAccount: 'local',
     accessLevel: Calendar.CalendarAccessLevel.OWNER,
@@ -89,4 +96,25 @@ export async function buscarEventoDaAgenda(nativeEventId: string) {
  */
 export async function apagarEventoDaAgenda(nativeEventId: string): Promise<void> {
   await Calendar.deleteEventAsync(nativeEventId);
+}
+
+/**
+ * Atualiza um evento já existente na agenda nativa (usado no fluxo de edição).
+ * Mantém o mesmo alarme padrão de 30 min antes, já que a agenda nativa não
+ * expõe o alarme atual de volta pra gente reaproveitar com segurança.
+ */
+export async function atualizarEventoNaAgenda(
+  nativeEventId: string,
+  evento: NovoEvento
+): Promise<void> {
+  const fimEvento = new Date(evento.data.getTime() + 60 * 60 * 1000);
+
+  await Calendar.updateEventAsync(nativeEventId, {
+    title: evento.titulo,
+    notes: evento.descricao,
+    startDate: evento.data,
+    endDate: fimEvento,
+    timeZone: 'America/Fortaleza',
+    alarms: [{ relativeOffset: -30 }],
+  });
 }
