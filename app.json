@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Agenda App",
+    "slug": "agenda-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.markus.agendaapp",
+      "permissions": ["READ_CALENDAR", "WRITE_CALENDAR"]
+    },
+    "plugins": [
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "O app precisa acessar sua agenda para salvar os eventos automaticamente."
+        }
+      ]
+    ]
+  }
+}
