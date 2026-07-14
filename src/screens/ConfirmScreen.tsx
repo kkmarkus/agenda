@@ -1,16 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
-import { pedirPermissao, criarEventoNaAgenda } from '../services/calendarService';
-import { salvarRegistro, listarTagsUnicas } from '../services/database';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import {
+  pedirPermissao,
+  criarEventoNaAgenda,
+  atualizarEventoNaAgenda,
+} from '../services/calendarService';
+import { salvarRegistro, listarTagsUnicas, atualizarTagPorNativeId } from '../services/database';
 import { NovoEvento } from '../types/event';
+import type { RootStackParamList } from '../navigation/AppNavigator';
 
-type Props = {
-  navigation: { navigate: (tela: 'Dashboard') => void; goBack: () => void };
-  route: { params: { rascunho: Partial<NovoEvento> } };
-};
+// CORREÇÃO: Props simplificado próprio substituído pelo tipo real de navegação.
+type Props = NativeStackScreenProps<RootStackParamList, 'Confirmar'>;
 
 export default function ConfirmScreen({ navigation, route }: Props) {
-  const { rascunho } = route.params;
+  const { rascunho, nativeEventId } = route.params;
+  const modoEdicao = !!nativeEventId;
 
   const [titulo, setTitulo] = useState(rascunho.titulo ?? '');
   const [dataStr, setDataStr] = useState(formatarData(rascunho.data));
@@ -50,8 +56,17 @@ export default function ConfirmScreen({ navigation, route }: Props) {
       }
 
       const evento: NovoEvento = { titulo: titulo.trim(), data, descricao: descricao.trim() || undefined, tag: tag.trim() };
-      const nativeEventId = await criarEventoNaAgenda(evento);
-      salvarRegistro(nativeEventId, evento.tag);
+
+      if (modoEdicao && nativeEventId) {
+        // MELHORIA: modo edição — atualiza o evento existente na agenda
+        // nativa e a tag no banco local, em vez de criar um registro novo
+        // (o que antes duplicava o evento e deixava o antigo órfão).
+        await atualizarEventoNaAgenda(nativeEventId, evento);
+        atualizarTagPorNativeId(nativeEventId, evento.tag);
+      } else {
+        const novoNativeEventId = await criarEventoNaAgenda(evento);
+        salvarRegistro(novoNativeEventId, evento.tag);
+      }
 
       navigation.navigate('Dashboard');
     } catch (erro) {
@@ -62,9 +77,12 @@ export default function ConfirmScreen({ navigation, route }: Props) {
   }
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.titulo}>Confirmar evento</Text>
-      <Text style={styles.subtitulo}>Revise e ajuste antes de salvar</Text>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <ScrollView style={styles.scroll}>
+      <Text style={styles.titulo}>{modoEdicao ? 'Editar evento' : 'Confirmar evento'}</Text>
+      <Text style={styles.subtitulo}>
+        {modoEdicao ? 'Ajuste o que for preciso e salve' : 'Revise e ajuste antes de salvar'}
+      </Text>
 
       <Text style={styles.label}>Título</Text>
       <TextInput style={styles.input} value={titulo} onChangeText={setTitulo} />
@@ -107,10 +125,13 @@ export default function ConfirmScreen({ navigation, route }: Props) {
           <Text style={styles.botaoSecundarioTexto}>Cancelar</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.botaoPrincipal} onPress={handleSalvar} disabled={salvando}>
-          <Text style={styles.botaoPrincipalTexto}>{salvando ? 'Salvando...' : 'Salvar na agenda'}</Text>
+          <Text style={styles.botaoPrincipalTexto}>
+            {salvando ? 'Salvando...' : modoEdicao ? 'Salvar alterações' : 'Salvar na agenda'}
+          </Text>
         </TouchableOpacity>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -147,7 +168,8 @@ function montarData(dataStr: string, horaStr: string): Date | null {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: '#fff' },
+  scroll: { flex: 1, padding: 20 },
   titulo: { fontSize: 20, fontWeight: '600' },
   subtitulo: { fontSize: 13, color: '#666', marginTop: 4, marginBottom: 16 },
   label: { fontSize: 12, color: '#888', marginBottom: 4 },
