@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { TOTAL_CORES_TAG } from '../theme/theme';
 
 // Guardamos SÓ o id do evento nativo + a tag.
 // Título, data e descrição NUNCA são duplicados aqui — sempre vêm ao vivo
@@ -13,7 +14,19 @@ export function initDatabase(): void {
       tag TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS tag_cores (
+      tag TEXT PRIMARY KEY,
+      cor_index INTEGER NOT NULL
+    );
   `);
+
+  // Migração: quem já tinha eventos salvos antes dessa tabela existir tem
+  // tags sem nenhuma cor gravada ainda. Preenchemos aqui, uma vez, pra elas
+  // não aparecerem todas na mesma cor até o próximo evento ser editado.
+  const tagsSemCor = db.getAllSync<{ tag: string }>(
+    `SELECT DISTINCT tag FROM eventos WHERE tag NOT IN (SELECT tag FROM tag_cores);`
+  );
+  tagsSemCor.forEach((linha) => garantirCorDaTag(linha.tag));
 }
 
 export interface RegistroEvento {
@@ -27,6 +40,7 @@ export function salvarRegistro(nativeEventId: string, tag: string): void {
     `INSERT INTO eventos (native_event_id, tag, created_at) VALUES (?, ?, ?);`,
     [nativeEventId, tag, new Date().toISOString()]
   );
+  garantirCorDaTag(tag);
 }
 
 export function listarRegistros(): RegistroEvento[] {
@@ -46,6 +60,7 @@ export function apagarRegistro(id: number): void {
  */
 export function atualizarTagPorNativeId(nativeEventId: string, tag: string): void {
   db.runSync(`UPDATE eventos SET tag = ? WHERE native_event_id = ?;`, [tag, nativeEventId]);
+  garantirCorDaTag(tag);
 }
 
 /**
@@ -67,4 +82,51 @@ export function contarPorTag(): { tag: string; total: number }[] {
   return db.getAllSync<{ tag: string; total: number }>(
     `SELECT tag, COUNT(*) as total FROM eventos GROUP BY tag COLLATE NOCASE ORDER BY tag COLLATE NOCASE;`
   );
+}
+
+// --- Cores de tag ---
+// Antes a cor de cada tag era só um índice calculado na hora (posição na
+// lista), então não existia nada pra "mudar": a cor mudava sozinha se a
+// ordem das tags mudasse, e não tinha como ela escolher uma cor fixa.
+// Agora a cor fica gravada aqui, por tag, e só muda quando ela escolhe.
+
+function normalizarTag(tag: string): string {
+  return tag.trim().toLowerCase();
+}
+
+export function obterCorIndexDaTag(tag: string): number | null {
+  const linha = db.getFirstSync<{ cor_index: number }>(
+    `SELECT cor_index FROM tag_cores WHERE tag = ?;`,
+    [normalizarTag(tag)]
+  );
+  return linha ? linha.cor_index : null;
+}
+
+/** Define/sobrescreve a cor de uma tag — usado quando ela escolhe manualmente. */
+export function definirCorDaTag(tag: string, corIndex: number): void {
+  db.runSync(
+    `INSERT INTO tag_cores (tag, cor_index) VALUES (?, ?)
+     ON CONFLICT(tag) DO UPDATE SET cor_index = excluded.cor_index;`,
+    [normalizarTag(tag), corIndex]
+  );
+}
+
+/** Garante que toda tag tenha uma cor assim que é usada pela primeira vez
+ * (round-robin pela paleta), sem sobrescrever uma cor já escolhida. */
+function garantirCorDaTag(tag: string): void {
+  if (obterCorIndexDaTag(tag) !== null) return;
+  const linha = db.getFirstSync<{ total: number }>(`SELECT COUNT(*) as total FROM tag_cores;`);
+  const proximoIndex = (linha?.total ?? 0) % TOTAL_CORES_TAG;
+  definirCorDaTag(tag, proximoIndex);
+}
+
+/** Mapa tag (normalizada) -> índice de cor, pra lookup em lote no Dashboard
+ * (evita uma query por card na lista). */
+export function listarCoresDeTags(): Record<string, number> {
+  const linhas = db.getAllSync<{ tag: string; cor_index: number }>(`SELECT tag, cor_index FROM tag_cores;`);
+  const mapa: Record<string, number> = {};
+  linhas.forEach((l) => {
+    mapa[l.tag] = l.cor_index;
+  });
+  return mapa;
 }
