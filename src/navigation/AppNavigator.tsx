@@ -15,7 +15,10 @@ import { NovoEvento } from '../types/event';
 // próprio, o que já causou divergência entre o que o navigator esperava
 // e o que cada tela declarava).
 export type RootStackParamList = {
-  Dashboard: { tagFiltro?: string } | undefined;
+  // Filtro por tag agora é estado local do Dashboard (abas), não mais
+  // passado por navegação — TagsScreen deixou de ser um "seletor de
+  // filtro" e virou só a tela de gerenciar cor de cada tag.
+  Dashboard: undefined;
   Input: undefined;
   // nativeEventId presente = modo edição (ConfirmScreen atualiza em vez de criar).
   Confirmar: { rascunho: Partial<NovoEvento>; nativeEventId?: string };
@@ -27,7 +30,10 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 export default function AppNavigator() {
   return (
     <NavigationContainer>
-      <Stack.Navigator initialRouteName="Dashboard" screenOptions={{ headerShown: false }}>
+      <Stack.Navigator
+        initialRouteName="Dashboard"
+        screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
+      >
         <Stack.Screen name="Dashboard" component={DashboardScreen} />
         <Stack.Screen name="Input" component={InputScreen} />
         <Stack.Screen name="Confirmar" component={ConfirmScreen} />
