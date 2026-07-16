@@ -1,20 +1,36 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  StyleSheet,
+  ScrollView,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
   pedirPermissao,
   criarEventoNaAgenda,
   atualizarEventoNaAgenda,
 } from '../services/calendarService';
-import { salvarRegistro, listarTagsUnicas, atualizarTagPorNativeId } from '../services/database';
+import { salvarRegistro, listarTagsUnicas, atualizarTagPorNativeId, listarCoresDeTags } from '../services/database';
 import { NovoEvento } from '../types/event';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { useTheme } from '../theme/ThemeContext';
+import { corDaTag } from '../theme/theme';
 
 // CORREÇÃO: Props simplificado próprio substituído pelo tipo real de navegação.
 type Props = NativeStackScreenProps<RootStackParamList, 'Confirmar'>;
 
 export default function ConfirmScreen({ navigation, route }: Props) {
+  const theme = useTheme();
+  const styles = criarStyles(theme);
+
   const { rascunho, nativeEventId } = route.params;
   const modoEdicao = !!nativeEventId;
 
@@ -24,11 +40,15 @@ export default function ConfirmScreen({ navigation, route }: Props) {
   const [descricao, setDescricao] = useState(rascunho.descricao ?? '');
   const [tag, setTag] = useState(rascunho.tag ?? '');
   const [tagsExistentes, setTagsExistentes] = useState<string[]>([]);
+  const [coresPorTag, setCoresPorTag] = useState<Record<string, number>>({});
   const [salvando, setSalvando] = useState(false);
+  const [campoFocado, setCampoFocado] = useState<string | null>(null);
 
-  // Autocomplete: carrega as tags já usadas por ela pra sugerir como chips.
+  // Autocomplete: carrega as tags já usadas por ela pra sugerir como chips,
+  // já com a cor persistida de cada uma (mesma fonte de verdade da TagsScreen).
   useEffect(() => {
     setTagsExistentes(listarTagsUnicas());
+    setCoresPorTag(listarCoresDeTags());
   }, []);
 
   async function handleSalvar() {
@@ -78,58 +98,143 @@ export default function ConfirmScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <ScrollView style={styles.scroll}>
-      <Text style={styles.titulo}>{modoEdicao ? 'Editar evento' : 'Confirmar evento'}</Text>
-      <Text style={styles.subtitulo}>
-        {modoEdicao ? 'Ajuste o que for preciso e salve' : 'Revise e ajuste antes de salvar'}
-      </Text>
+      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+        <Text style={styles.overline}>{modoEdicao ? 'EDITAR' : 'REVISAR ANTES DE SALVAR'}</Text>
+        <Text style={styles.titulo}>{modoEdicao ? 'Editar evento' : 'Confirmar evento'}</Text>
 
-      <Text style={styles.label}>Título</Text>
-      <TextInput style={styles.input} value={titulo} onChangeText={setTitulo} />
+        <Text style={styles.label}>TÍTULO</Text>
+        <TextInput
+          style={[styles.input, campoFocado === 'titulo' && styles.inputFocado]}
+          value={titulo}
+          onChangeText={setTitulo}
+          onFocus={() => setCampoFocado('titulo')}
+          onBlur={() => setCampoFocado(null)}
+          placeholderTextColor={theme.colors.textMuted}
+        />
 
-      <View style={styles.linhaDupla}>
-        <View style={styles.inputMetade}>
-          <Text style={styles.label}>Data</Text>
-          <TextInput style={styles.input} placeholder="dd/mm/aaaa" value={dataStr} onChangeText={setDataStr} />
+        <View style={styles.linhaDupla}>
+          <View style={styles.inputMetade}>
+            <View style={styles.labelComIcone}>
+              <Feather name="calendar" size={13} color={theme.colors.textMuted} />
+              <Text style={styles.label}>DATA</Text>
+            </View>
+            <TextInput
+              style={[styles.input, campoFocado === 'data' && styles.inputFocado]}
+              placeholder="dd/mm/aaaa"
+              placeholderTextColor={theme.colors.textMuted}
+              value={dataStr}
+              onChangeText={setDataStr}
+              onFocus={() => setCampoFocado('data')}
+              onBlur={() => setCampoFocado(null)}
+            />
+          </View>
+          <View style={styles.inputMetade}>
+            <View style={styles.labelComIcone}>
+              <Feather name="clock" size={13} color={theme.colors.textMuted} />
+              <Text style={styles.label}>HORA</Text>
+            </View>
+            <TextInput
+              style={[styles.input, campoFocado === 'hora' && styles.inputFocado]}
+              placeholder="HH:mm"
+              placeholderTextColor={theme.colors.textMuted}
+              value={horaStr}
+              onChangeText={setHoraStr}
+              onFocus={() => setCampoFocado('hora')}
+              onBlur={() => setCampoFocado(null)}
+            />
+          </View>
         </View>
-        <View style={styles.inputMetade}>
-          <Text style={styles.label}>Hora</Text>
-          <TextInput style={styles.input} placeholder="HH:mm" value={horaStr} onChangeText={setHoraStr} />
+
+        <Text style={styles.label}>DESCRIÇÃO (OPCIONAL)</Text>
+        <TextInput
+          style={[styles.input, styles.textarea, campoFocado === 'descricao' && styles.inputFocado]}
+          multiline
+          placeholder="Detalhes adicionais do evento"
+          placeholderTextColor={theme.colors.textMuted}
+          value={descricao}
+          onChangeText={setDescricao}
+          onFocus={() => setCampoFocado('descricao')}
+          onBlur={() => setCampoFocado(null)}
+        />
+
+        <View style={styles.labelComIcone}>
+          <Feather name="tag" size={13} color={theme.colors.textMuted} />
+          <Text style={styles.label}>TAG</Text>
         </View>
-      </View>
+        <TextInput
+          style={[styles.input, campoFocado === 'tag' && styles.inputFocado]}
+          placeholder="Ex: Universidade"
+          placeholderTextColor={theme.colors.textMuted}
+          value={tag}
+          onChangeText={setTag}
+          onFocus={() => setCampoFocado('tag')}
+          onBlur={() => setCampoFocado(null)}
+        />
 
-      <Text style={styles.label}>Descrição (opcional)</Text>
-      <TextInput
-        style={[styles.input, styles.textarea]}
-        multiline
-        placeholder="Detalhes adicionais do evento"
-        value={descricao}
-        onChangeText={setDescricao}
-      />
+        {tagsExistentes.length > 0 && (
+          <View style={styles.chipsRow}>
+            {tagsExistentes.map((t) => {
+              const selecionada = t.trim().toLowerCase() === tag.trim().toLowerCase();
+              const cor = corDaTag(coresPorTag[t.trim().toLowerCase()] ?? 0, theme.mode);
+              return (
+                <Pressable
+                  key={t}
+                  style={({ pressed }) => [
+                    styles.chip,
+                    selecionada && styles.chipSelecionado,
+                    { opacity: pressed ? 0.7 : 1 },
+                  ]}
+                  onPress={() => setTag(t)}
+                >
+                  <View style={[styles.chipBolinha, { backgroundColor: cor.base }]} />
+                  <Text style={[styles.chipTexto, selecionada && styles.chipTextoSelecionado]}>{t}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
 
-      <Text style={styles.label}>Tag</Text>
-      <TextInput style={styles.input} placeholder="Ex: Universidade" value={tag} onChangeText={setTag} />
-
-      {tagsExistentes.length > 0 && (
-        <View style={styles.chipsRow}>
-          {tagsExistentes.map((t) => (
-            <TouchableOpacity key={t} style={styles.chip} onPress={() => setTag(t)}>
-              <Text style={styles.chipTexto}>{t}</Text>
-            </TouchableOpacity>
-          ))}
+        <View style={styles.botoesRow}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.botaoSecundario,
+              { opacity: pressed ? 0.7 : 1, transform: [{ scale: pressed ? 0.98 : 1 }] },
+            ]}
+            onPress={() => navigation.goBack()}
+          >
+            <Feather name="x" size={16} color={theme.colors.textPrimary} />
+            <Text style={styles.botaoSecundarioTexto}>Cancelar</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.botaoPrincipalWrapper,
+              { opacity: pressed || salvando ? 0.7 : 1, transform: [{ scale: pressed ? 0.98 : 1 }] },
+            ]}
+            onPress={handleSalvar}
+            disabled={salvando}
+          >
+            <LinearGradient
+              colors={[theme.colors.gradientStart, theme.colors.gradientEnd]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.botaoPrincipal}
+            >
+              {salvando ? (
+                <ActivityIndicator size="small" color={theme.colors.accentText} style={styles.spinner} />
+              ) : (
+                <Feather
+                  name={modoEdicao ? 'check' : 'calendar'}
+                  size={16}
+                  color={theme.colors.accentText}
+                  style={styles.spinner}
+                />
+              )}
+              <Text style={styles.botaoPrincipalTexto}>
+                {salvando ? 'Salvando...' : modoEdicao ? 'Salvar alterações' : 'Salvar na agenda'}
+              </Text>
+            </LinearGradient>
+          </Pressable>
         </View>
-      )}
-
-      <View style={styles.botoesRow}>
-        <TouchableOpacity style={styles.botaoSecundario} onPress={() => navigation.goBack()}>
-          <Text style={styles.botaoSecundarioTexto}>Cancelar</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.botaoPrincipal} onPress={handleSalvar} disabled={salvando}>
-          <Text style={styles.botaoPrincipalTexto}>
-            {salvando ? 'Salvando...' : modoEdicao ? 'Salvar alterações' : 'Salvar na agenda'}
-          </Text>
-        </TouchableOpacity>
-      </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -167,48 +272,77 @@ function montarData(dataStr: string, horaStr: string): Date | null {
   return data;
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  scroll: { flex: 1, padding: 20 },
-  titulo: { fontSize: 20, fontWeight: '600' },
-  subtitulo: { fontSize: 13, color: '#666', marginTop: 4, marginBottom: 16 },
-  label: { fontSize: 12, color: '#888', marginBottom: 4 },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 10,
-    fontSize: 14,
-    marginBottom: 12,
-  },
-  textarea: { minHeight: 60, textAlignVertical: 'top' },
-  linhaDupla: { flexDirection: 'row', gap: 8 },
-  inputMetade: { flex: 1 },
-  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 16 },
-  chip: {
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  chipTexto: { fontSize: 12, color: '#444' },
-  botoesRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 24 },
-  botaoSecundario: {
-    flex: 1,
-    padding: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    alignItems: 'center',
-  },
-  botaoSecundarioTexto: { fontSize: 14, color: '#111' },
-  botaoPrincipal: {
-    flex: 1,
-    backgroundColor: '#111',
-    borderRadius: 8,
-    padding: 14,
-    alignItems: 'center',
-  },
-  botaoPrincipalTexto: { color: '#fff', fontSize: 14, fontWeight: '500' },
-});
+function criarStyles(theme: ReturnType<typeof useTheme>) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: theme.colors.background },
+    scroll: { flex: 1, padding: theme.spacing.lg },
+    overline: { ...theme.typography.overline, color: theme.colors.accent },
+    titulo: { ...theme.typography.heading, color: theme.colors.textPrimary, marginTop: 6, marginBottom: theme.spacing.lg },
+    label: { ...theme.typography.overline, color: theme.colors.textMuted, marginBottom: theme.spacing.xs + 2 },
+    labelComIcone: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: theme.spacing.xs + 2 },
+    input: {
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: theme.radius.md,
+      padding: theme.spacing.sm + 4,
+      ...theme.typography.body,
+      color: theme.colors.textPrimary,
+      marginBottom: theme.spacing.md,
+      backgroundColor: theme.colors.surfaceElevated,
+    },
+    inputFocado: {
+      borderColor: theme.colors.accent,
+      borderWidth: 1.5,
+    },
+    textarea: { minHeight: 64, textAlignVertical: 'top' },
+    linhaDupla: { flexDirection: 'row', gap: theme.spacing.sm },
+    inputMetade: { flex: 1 },
+    chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.xs + 2, marginBottom: theme.spacing.lg },
+    chip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingVertical: theme.spacing.xs + 1,
+      paddingHorizontal: theme.spacing.sm + 2,
+      borderRadius: theme.radius.pill,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      backgroundColor: theme.colors.surface,
+    },
+    chipSelecionado: {
+      borderColor: theme.colors.accent,
+      backgroundColor: theme.colors.accentSoft,
+    },
+    chipBolinha: { width: 7, height: 7, borderRadius: 4 },
+    chipTexto: { ...theme.typography.caption, color: theme.colors.textSecondary },
+    chipTextoSelecionado: { color: theme.colors.textPrimary, fontFamily: theme.typography.bodyMedium.fontFamily },
+    botoesRow: { flexDirection: 'row', gap: theme.spacing.sm, marginTop: theme.spacing.xs, marginBottom: theme.spacing.lg },
+    botaoSecundario: {
+      flex: 1,
+      flexDirection: 'row',
+      gap: theme.spacing.xs + 2,
+      padding: theme.spacing.md - 2,
+      borderRadius: theme.radius.md,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    botaoSecundarioTexto: { ...theme.typography.bodyMedium, color: theme.colors.textPrimary },
+    botaoPrincipalWrapper: { flex: 1 },
+    botaoPrincipal: {
+      flexDirection: 'row',
+      borderRadius: theme.radius.md,
+      padding: theme.spacing.md - 2,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: theme.glow.color,
+      shadowOpacity: theme.glow.opacity,
+      shadowRadius: theme.glow.radius,
+      shadowOffset: { width: 0, height: theme.glow.offsetY },
+      elevation: 4,
+    },
+    botaoPrincipalTexto: { ...theme.typography.bodyMedium, color: theme.colors.accentText },
+    spinner: { marginRight: theme.spacing.xs },
+  });
+}
