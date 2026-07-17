@@ -7,7 +7,12 @@
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.markus.agendaapp",
-      "permissions": ["READ_CALENDAR", "WRITE_CALENDAR"]
+      "permissions": [
+        "READ_CALENDAR",
+        "WRITE_CALENDAR",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ]
     },
     "plugins": [
       [
@@ -23,7 +28,26 @@
             "kotlinVersion": "1.9.25"
           }
         }
+      ],
+      "expo-asset",
+      "expo-sqlite",
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "node_modules/@expo-google-fonts/noto-serif/400Regular/NotoSerif_400Regular.ttf",
+            "node_modules/@expo-google-fonts/noto-serif/600SemiBold/NotoSerif_600SemiBold.ttf",
+            "node_modules/@expo-google-fonts/noto-serif/700Bold/NotoSerif_700Bold.ttf",
+            "node_modules/@expo-google-fonts/yeseva-one/400Regular/YesevaOne_400Regular.ttf",
+            "./assets/fonts/feather.ttf"
+          ]
+        }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "5a19f87e-b087-4a88-9858-bea32bca424d"
+      }
+    }
   }
 }
