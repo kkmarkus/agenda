@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Feather } from '@expo/vector-icons';
-import { contarPorTag, listarCoresDeTags, definirCorDaTag } from '../services/database';
+import { contarPorTag, listarCoresDeTags, definirCorDaTag, SEM_TAG_LABEL } from '../services/database';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme/ThemeContext';
 import { corDaTag, TAG_WASH_ALPHA } from '../theme/theme';
@@ -21,7 +21,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Tags'>;
 export default function TagsScreen({ navigation }: Props) {
   const theme = useTheme();
   const styles = criarStyles(theme);
-  const [tags, setTags] = useState<{ tag: string; total: number }[]>([]);
+  const [tags, setTags] = useState<{ tag: string | null; total: number }[]>([]);
   const [coresPorTag, setCoresPorTag] = useState<Record<string, number>>({});
   const [tagEmEdicao, setTagEmEdicao] = useState<string | null>(null);
 
@@ -49,6 +49,12 @@ export default function TagsScreen({ navigation }: Props) {
     setTagEmEdicao(null);
   }
 
+  // "Sem tag" não é uma tag de verdade — não faz sentido ela escolher uma
+  // cor pra "ausência de tag". Separamos esse grupo da lista editável e
+  // mostramos só a contagem, como uma informação, não um card tocável.
+  const tagsReais = tags.filter((t): t is { tag: string; total: number } => t.tag !== null);
+  const grupoSemTag = tags.find((t) => t.tag === null);
+
   const cabecalho = (
     <View style={styles.headerTopRow}>
       <Pressable
@@ -65,7 +71,7 @@ export default function TagsScreen({ navigation }: Props) {
     </View>
   );
 
-  if (tags.length === 0) {
+  if (tagsReais.length === 0 && !grupoSemTag) {
     return (
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         {cabecalho}
@@ -85,36 +91,53 @@ export default function TagsScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {cabecalho}
       <Text style={styles.subtitulo}>Toque numa tag pra trocar a cor dela</Text>
-      <FlatList
-        data={tags}
-        keyExtractor={(item) => item.tag}
-        showsVerticalScrollIndicator={false}
-        renderItem={({ item, index }) => {
-          const cor = corDaTag(corIndexDe(item.tag, index), theme.mode);
-          return (
-            <Pressable
-              style={({ pressed }) => [styles.card, { opacity: pressed ? 0.8 : 1 }]}
-              onPress={() => setTagEmEdicao(item.tag)}
-            >
-              <View style={[styles.faixa, { backgroundColor: cor.base }]} />
-              <View style={styles.cardConteudo}>
-                <View style={styles.cardEsquerda}>
-                  <View style={[styles.iconeTag, { backgroundColor: cor.base + TAG_WASH_ALPHA }]}>
-                    <Feather name="tag" size={13} color={cor.base} />
+
+      {grupoSemTag && (
+        <View style={styles.cardSemTag}>
+          <View style={styles.cardEsquerda}>
+            <View style={[styles.iconeTag, { backgroundColor: theme.colors.border }]}>
+              <Feather name="slash" size={13} color={theme.colors.textMuted} />
+            </View>
+            <Text style={[styles.cardTitulo, { color: theme.colors.textMuted }]}>{SEM_TAG_LABEL}</Text>
+          </View>
+          <Text style={styles.cardContagem}>
+            {grupoSemTag.total === 1 ? '1 evento' : `${grupoSemTag.total} eventos`}
+          </Text>
+        </View>
+      )}
+
+      {tagsReais.length > 0 && (
+        <FlatList
+          data={tagsReais}
+          keyExtractor={(item) => item.tag}
+          showsVerticalScrollIndicator={false}
+          renderItem={({ item, index }) => {
+            const cor = corDaTag(corIndexDe(item.tag, index), theme.mode);
+            return (
+              <Pressable
+                style={({ pressed }) => [styles.card, { opacity: pressed ? 0.8 : 1 }]}
+                onPress={() => setTagEmEdicao(item.tag)}
+              >
+                <View style={[styles.faixa, { backgroundColor: cor.base }]} />
+                <View style={styles.cardConteudo}>
+                  <View style={styles.cardEsquerda}>
+                    <View style={[styles.iconeTag, { backgroundColor: cor.base + TAG_WASH_ALPHA }]}>
+                      <Feather name="tag" size={13} color={cor.base} />
+                    </View>
+                    <Text style={styles.cardTitulo}>{item.tag}</Text>
                   </View>
-                  <Text style={styles.cardTitulo}>{item.tag}</Text>
+                  <View style={styles.cardDireita}>
+                    <Text style={styles.cardContagem}>
+                      {item.total === 1 ? '1 evento' : `${item.total} eventos`}
+                    </Text>
+                    <Feather name="chevron-right" size={16} color={theme.colors.textMuted} />
+                  </View>
                 </View>
-                <View style={styles.cardDireita}>
-                  <Text style={styles.cardContagem}>
-                    {item.total === 1 ? '1 evento' : `${item.total} eventos`}
-                  </Text>
-                  <Feather name="chevron-right" size={16} color={theme.colors.textMuted} />
-                </View>
-              </View>
-            </Pressable>
-          );
-        }}
-      />
+              </Pressable>
+            );
+          }}
+        />
+      )}
 
       <TagColorPicker
         visivel={tagEmEdicao !== null}
@@ -188,6 +211,18 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       elevation: theme.shadow.opacity > 0 ? 2 : 0,
     },
     faixa: { width: 3 },
+    cardSemTag: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      borderRadius: theme.radius.lg,
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderStyle: 'dashed',
+      padding: theme.spacing.md,
+      marginBottom: theme.spacing.md,
+    },
     cardConteudo: {
       flex: 1,
       flexDirection: 'row',

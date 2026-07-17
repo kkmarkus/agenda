@@ -64,10 +64,9 @@ export default function ConfirmScreen({ navigation, route }: Props) {
       setAviso({ titulo: 'Data inválida', mensagem: 'Confira o formato: dd/mm/aaaa e HH:mm.' });
       return;
     }
-    if (!tag.trim()) {
-      setAviso({ titulo: 'Falta a tag', mensagem: 'Escolha ou digite uma tag pra organizar esse evento.' });
-      return;
-    }
+    // MUDANÇA: tag deixou de ser obrigatória. Antes essa validação bloqueava
+    // o salvamento sem uma tag; agora um evento sem tag é um estado válido
+    // (cai no grupo "Sem tag" no Dashboard e na tela de Tags).
 
     setSalvando(true);
     try {
@@ -77,7 +76,12 @@ export default function ConfirmScreen({ navigation, route }: Props) {
         return;
       }
 
-      const evento: NovoEvento = { titulo: titulo.trim(), data, descricao: descricao.trim() || undefined, tag: tag.trim() };
+      const evento: NovoEvento = {
+        titulo: titulo.trim(),
+        data,
+        descricao: descricao.trim() || undefined,
+        tag: tag.trim() || null,
+      };
 
       if (modoEdicao && nativeEventId) {
         // MELHORIA: modo edição — atualiza o evento existente na agenda
@@ -161,7 +165,7 @@ export default function ConfirmScreen({ navigation, route }: Props) {
 
         <View style={styles.labelComIcone}>
           <Feather name="tag" size={13} color={theme.colors.textMuted} />
-          <Text style={styles.label}>TAG</Text>
+          <Text style={styles.label}>TAG (OPCIONAL)</Text>
         </View>
         <TextInput
           style={[styles.input, campoFocado === 'tag' && styles.inputFocado]}
@@ -175,6 +179,21 @@ export default function ConfirmScreen({ navigation, route }: Props) {
 
         {tagsExistentes.length > 0 && (
           <View style={styles.chipsRow}>
+            {/* Chip "Sem tag": limpa o campo, pra ela poder desfazer uma
+                seleção de tag sem precisar apagar o texto manualmente. */}
+            <Pressable
+              style={({ pressed }) => [
+                styles.chip,
+                tag.trim() === '' && styles.chipSelecionado,
+                { opacity: pressed ? 0.7 : 1 },
+              ]}
+              onPress={() => setTag('')}
+            >
+              <Feather name="slash" size={11} color={theme.colors.textMuted} />
+              <Text style={[styles.chipTexto, tag.trim() === '' && styles.chipTextoSelecionado]}>
+                Sem tag
+              </Text>
+            </Pressable>
             {tagsExistentes.map((t) => {
               const selecionada = t.trim().toLowerCase() === tag.trim().toLowerCase();
               const cor = corDaTag(coresPorTag[t.trim().toLowerCase()] ?? 0, theme.mode);
