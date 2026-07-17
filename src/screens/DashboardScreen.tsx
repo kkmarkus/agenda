@@ -5,8 +5,17 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Feather } from '@expo/vector-icons';
 import Swipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
-import { buscarEventoDaAgenda, apagarEventoDaAgenda } from '../services/calendarService';
-import { listarRegistros, apagarRegistro, listarCoresDeTags, listarTagsUnicas } from '../services/database';
+import { buscarEventoDaAgenda, apagarEventoDaAgenda, buscarEventosFuturosDeCalendarios } from '../services/calendarService';
+import {
+  listarRegistros,
+  apagarRegistro,
+  listarCoresDeTags,
+  listarTagsUnicas,
+  listarCalendariosSincronizadosAtivos,
+  listarNativeIdsRegistrados,
+  salvarRegistro,
+  SEM_TAG_LABEL,
+} from '../services/database';
 import { EventoApp } from '../types/event';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme/ThemeContext';
@@ -22,6 +31,11 @@ import ConfirmDialog from '../components/ConfirmDialog';
 type Props = NativeStackScreenProps<RootStackParamList, 'Dashboard'>;
 
 const LIMITE_URGENTE_HORAS = 48;
+// Janela de busca da sincronização: só importa eventos dos próximos 90
+// dias. Eventos mais distantes que isso simplesmente não existem ainda
+// pro dashboard — na próxima vez que ela abrir o app dentro dessa janela,
+// eles aparecem normalmente.
+const DIAS_SINCRONIZACAO = 90;
 
 const MESES_COMPLETOS = [
   'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
@@ -52,11 +66,43 @@ export default function DashboardScreen({ navigation }: Props) {
 
   // useFocusEffect (não useEffect) porque ela pode voltar pra essa tela
   // depois de salvar um evento novo — precisa recarregar toda vez que a tela ganha foco.
+  // A sincronização roda ANTES de carregar, na mesma passada: assim eventos
+  // importados de outros calendários já aparecem na primeira renderização,
+  // sem um segundo "pulo" na lista logo depois de carregar.
   useFocusEffect(
     useCallback(() => {
-      carregarEventos();
+      sincronizarCalendariosExternos().finally(() => carregarEventos());
     }, [])
   );
+
+  /**
+   * Importa eventos futuros dos calendários externos que ela escolheu
+   * sincronizar (ver CalendarSyncScreen). Só insere o que ainda não existe
+   * no banco local — compara pelo id nativo do evento, então rodar isso de
+   * novo a cada vez que o Dashboard ganha foco não duplica nada. Eventos
+   * importados sempre entram sem tag (tag: null), já que ela não passou
+   * por essa tela pra classificar — aparecem no grupo "Sem tag" até ela
+   * decidir dar uma tag (editando o evento).
+   */
+  async function sincronizarCalendariosExternos() {
+    try {
+      const idsAtivos = listarCalendariosSincronizadosAtivos();
+      if (idsAtivos.length === 0) return;
+
+      const eventosExternos = await buscarEventosFuturosDeCalendarios(idsAtivos, DIAS_SINCRONIZACAO);
+      const jaRegistrados = listarNativeIdsRegistrados();
+
+      for (const evento of eventosExternos) {
+        if (!jaRegistrados.has(evento.nativeEventId)) {
+          salvarRegistro(evento.nativeEventId, null);
+        }
+      }
+    } catch {
+      // Sincronização é um "bônus" — se falhar (ex: permissão revogada),
+      // o Dashboard ainda deve carregar normalmente com o que já existe
+      // no banco local, em vez de travar a tela inteira por causa disso.
+    }
+  }
 
   async function carregarEventos() {
     setCarregando(true);
@@ -122,9 +168,17 @@ export default function DashboardScreen({ navigation }: Props) {
     carregarEventos();
   }
 
-  const eventosFiltrados = tagAtiva
-    ? eventos.filter((e) => e.tag.toLowerCase() === tagAtiva.toLowerCase())
-    : eventos;
+  const temEventosSemTag = eventos.some((e) => !e.tag);
+
+  // tagAtiva: null = "Todas", '' = "Sem tag" (sentinel — tags de verdade
+  // nunca são string vazia, já que ConfirmScreen converte "" em null antes
+  // de salvar), qualquer outra string = tag específica.
+  const eventosFiltrados =
+    tagAtiva === null
+      ? eventos
+      : tagAtiva === ''
+      ? eventos.filter((e) => !e.tag)
+      : eventos.filter((e) => e.tag?.toLowerCase() === tagAtiva.toLowerCase());
 
   const agora = new Date();
 
@@ -142,15 +196,24 @@ export default function DashboardScreen({ navigation }: Props) {
           <Text style={styles.overline}>{formatarCabecalho(agora).toUpperCase()}</Text>
           <Text style={styles.titulo}>Agenda</Text>
         </View>
-        {/* Único acesso à tela de Tags agora — ela só serve pra gerenciar
-            a cor de cada tag, já que o filtro passou a viver aqui embaixo. */}
-        <Pressable
-          style={({ pressed }) => [styles.botaoTags, { opacity: pressed ? 0.6 : 1 }]}
-          onPress={() => navigation.navigate('Tags')}
-          hitSlop={10}
-        >
-          <Feather name="tag" size={18} color={theme.colors.textSecondary} />
-        </Pressable>
+        <View style={styles.headerAcoes}>
+          <Pressable
+            style={({ pressed }) => [styles.botaoTags, { opacity: pressed ? 0.6 : 1 }]}
+            onPress={() => navigation.navigate('Sincronizar')}
+            hitSlop={10}
+          >
+            <Feather name="refresh-cw" size={17} color={theme.colors.textSecondary} />
+          </Pressable>
+          {/* Único acesso à tela de Tags agora — ela só serve pra gerenciar
+              a cor de cada tag, já que o filtro passou a viver aqui embaixo. */}
+          <Pressable
+            style={({ pressed }) => [styles.botaoTags, { opacity: pressed ? 0.6 : 1 }]}
+            onPress={() => navigation.navigate('Tags')}
+            hitSlop={10}
+          >
+            <Feather name="tag" size={18} color={theme.colors.textSecondary} />
+          </Pressable>
+        </View>
       </View>
 
       {!carregando && eventos.length > 0 && (
@@ -171,20 +234,25 @@ export default function DashboardScreen({ navigation }: Props) {
         </View>
       )}
 
-      {tagsDisponiveis.length > 0 && (
+      {(tagsDisponiveis.length > 0 || temEventosSemTag) && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.tabsScroll}
           contentContainerStyle={styles.tabsContent}
         >
-          {['Todas', ...tagsDisponiveis].map((tag) => {
-            const ativa = tag === 'Todas' ? tagAtiva === null : tagAtiva?.toLowerCase() === tag.toLowerCase();
+          {['Todas', ...tagsDisponiveis, ...(temEventosSemTag ? [SEM_TAG_LABEL] : [])].map((tag) => {
+            const ativa =
+              tag === 'Todas'
+                ? tagAtiva === null
+                : tag === SEM_TAG_LABEL
+                ? tagAtiva === ''
+                : tagAtiva?.toLowerCase() === tag.toLowerCase();
             return (
               <Pressable
                 key={tag}
                 style={({ pressed }) => [styles.tab, ativa && styles.tabAtiva, { opacity: pressed ? 0.7 : 1 }]}
-                onPress={() => setTagAtiva(tag === 'Todas' ? null : tag)}
+                onPress={() => setTagAtiva(tag === 'Todas' ? null : tag === SEM_TAG_LABEL ? '' : tag)}
               >
                 <Text style={[styles.tabTexto, ativa && styles.tabTextoAtiva]}>{tag}</Text>
               </Pressable>
@@ -214,7 +282,9 @@ export default function DashboardScreen({ navigation }: Props) {
                   <Feather name="calendar" size={22} color={theme.colors.textMuted} />
                 </View>
                 <Text style={styles.vazio}>
-                  {tagAtiva
+                  {tagAtiva === ''
+                    ? 'Nenhum evento sem tag.'
+                    : tagAtiva
                     ? `Nenhum evento com a tag "${tagAtiva}".`
                     : 'Nenhum evento salvo ainda.\nToque em "+" pra criar o primeiro.'}
                 </Text>
@@ -224,8 +294,12 @@ export default function DashboardScreen({ navigation }: Props) {
           renderItem={({ item }) => {
             const horasRestantes = (item.data.getTime() - Date.now()) / (1000 * 60 * 60);
             const urgente = horasRestantes >= 0 && horasRestantes <= LIMITE_URGENTE_HORAS;
-            const corIndex = coresPorTag[item.tag.trim().toLowerCase()] ?? 0;
-            const cor = corDaTag(corIndex, theme.mode);
+            // Evento sem tag: nada pra colorir de verdade — usa o tom
+            // neutro (textMuted) tanto no traço lateral quanto no pill,
+            // pra não inventar uma "cor de sem-tag" que ela não escolheu.
+            const cor = item.tag
+              ? corDaTag(coresPorTag[item.tag.trim().toLowerCase()] ?? 0, theme.mode)
+              : { base: theme.colors.textMuted, text: theme.colors.textMuted };
 
             const corAcento = urgente ? theme.colors.urgent : cor.base;
 
@@ -261,7 +335,9 @@ export default function DashboardScreen({ navigation }: Props) {
                         </Text>
                         <View style={styles.cardTagPill}>
                           <View style={[styles.cardTagBolinha, { backgroundColor: cor.base }]} />
-                          <Text style={styles.cardTagTexto} numberOfLines={1}>{item.tag}</Text>
+                          <Text style={styles.cardTagTexto} numberOfLines={1}>
+                            {item.tag ?? SEM_TAG_LABEL}
+                          </Text>
                         </View>
                       </View>
                     </View>
@@ -343,6 +419,7 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     },
     overline: { ...theme.typography.overline, color: theme.colors.textMuted },
     titulo: { ...theme.typography.display, color: theme.colors.textPrimary, marginTop: 4 },
+    headerAcoes: { flexDirection: 'row', gap: theme.spacing.xs + 2 },
     botaoTags: {
       padding: theme.spacing.sm,
       marginTop: 2,

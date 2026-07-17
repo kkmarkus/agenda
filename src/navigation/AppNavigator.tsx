@@ -6,6 +6,7 @@ import InputScreen from '../screens/InputScreen';
 import ConfirmScreen from '../screens/ConfirmScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import TagsScreen from '../screens/TagsScreen';
+import CalendarSyncScreen from '../screens/CalendarSyncScreen';
 import { NovoEvento } from '../types/event';
 
 // Centraliza as telas e os parâmetros que cada uma espera receber.
@@ -23,6 +24,8 @@ export type RootStackParamList = {
   // nativeEventId presente = modo edição (ConfirmScreen atualiza em vez de criar).
   Confirmar: { rascunho: Partial<NovoEvento>; nativeEventId?: string };
   Tags: undefined;
+  // Escolher quais calendários nativos (fora o do app) sincronizar.
+  Sincronizar: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -38,6 +41,7 @@ export default function AppNavigator() {
         <Stack.Screen name="Input" component={InputScreen} />
         <Stack.Screen name="Confirmar" component={ConfirmScreen} />
         <Stack.Screen name="Tags" component={TagsScreen} />
+        <Stack.Screen name="Sincronizar" component={CalendarSyncScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

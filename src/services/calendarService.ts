@@ -118,3 +118,58 @@ export async function atualizarEventoNaAgenda(
     alarms: [{ relativeOffset: -30 }],
   });
 }
+
+// --- Sincronização com outros calendários nativos ---
+// Permite importar automaticamente eventos que ela já tem em outros
+// calendários do aparelho (o pessoal, o do trabalho, etc.) pro dashboard
+// do app, sem precisar recriar cada um manualmente por texto livre.
+
+export interface CalendarioDisponivel {
+  id: string;
+  titulo: string;
+  cor: string;
+}
+
+/**
+ * Lista os calendários do aparelho que fazem sentido oferecer como fonte
+ * de sincronização: só os editáveis pela própria usuária (`allowsModifications`),
+ * o que já exclui calendários automáticos e somente-leitura como
+ * "Aniversários" e "Feriados" — importar esses geraria uma enxurrada de
+ * eventos que não são "compromissos" de verdade. Também excluímos o
+ * calendário do próprio app ("Meus Eventos (App)"), senão ele tentaria se
+ * auto-sincronizar e duplicar tudo que ela cria por aqui.
+ */
+export async function listarCalendariosDisponiveisParaSync(): Promise<CalendarioDisponivel[]> {
+  const calendarios = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+  return calendarios
+    .filter((c) => c.allowsModifications && c.title !== NOME_CALENDARIO_APP)
+    .map((c) => ({ id: c.id, titulo: c.title, cor: c.color }));
+}
+
+/**
+ * Busca eventos futuros (a partir de agora — nunca eventos passados, que
+ * não interessam pro dashboard) nos calendários selecionados, dentro de
+ * uma janela de `diasNoFuturo` dias.
+ *
+ * Por que polling em vez de um listener em tempo real: o Android/expo-calendar
+ * não expõe um jeito confiável de "escutar" mudanças na agenda nativa feitas
+ * por fora do app (ex: um evento criado direto no Google Calendar). Chamar
+ * isso no foco do Dashboard (useFocusEffect) é o padrão mais simples e
+ * robusto disponível, ainda que não seja instantâneo.
+ */
+export async function buscarEventosFuturosDeCalendarios(
+  calendarIds: string[],
+  diasNoFuturo: number
+): Promise<{ nativeEventId: string; titulo: string; data: Date }[]> {
+  if (calendarIds.length === 0) return [];
+
+  const agora = new Date();
+  const limite = new Date(agora.getTime() + diasNoFuturo * 24 * 60 * 60 * 1000);
+
+  const eventos = await Calendar.getEventsAsync(calendarIds, agora, limite);
+  return eventos.map((e) => ({
+    nativeEventId: e.id,
+    titulo: e.title,
+    data: new Date(e.startDate),
+  }));
+}
