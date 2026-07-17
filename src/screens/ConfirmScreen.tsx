@@ -30,11 +30,16 @@ export default function ConfirmScreen({ navigation, route }: Props) {
   const theme = useTheme();
   const styles = criarStyles(theme);
 
-  const { rascunho, nativeEventId } = route.params;
+  const { rascunho, nativeEventId, dataFim } = route.params;
   const modoEdicao = !!nativeEventId;
+  // Intervalo só faz sentido na criação — depois de salvo, os dois eventos
+  // (início/prazo final) passam a ser independentes, cada um editável na
+  // sua própria ida à ConfirmScreen (modoEdicao normal, sem esse conceito).
+  const ehIntervalo = !!dataFim && !modoEdicao;
 
   const [titulo, setTitulo] = useState(rascunho.titulo ?? '');
   const [dataStr, setDataStr] = useState(formatarData(rascunho.data));
+  const [dataFimStr, setDataFimStr] = useState(formatarData(dataFim));
   const [horaStr, setHoraStr] = useState(formatarHora(rascunho.data));
   const [descricao, setDescricao] = useState(rascunho.descricao ?? '');
   const [tag, setTag] = useState(rascunho.tag ?? '');
@@ -54,12 +59,17 @@ export default function ConfirmScreen({ navigation, route }: Props) {
   }, []);
 
   async function handleSalvar() {
-    const data = montarData(dataStr, horaStr);
-
     if (!titulo.trim()) {
       setAviso({ titulo: 'Falta o título', mensagem: 'Digite um título pro evento antes de salvar.' });
       return;
     }
+
+    if (ehIntervalo) {
+      await handleSalvarIntervalo();
+      return;
+    }
+
+    const data = montarData(dataStr, horaStr);
     if (!data) {
       setAviso({ titulo: 'Data inválida', mensagem: 'Confira o formato: dd/mm/aaaa e HH:mm.' });
       return;
@@ -102,11 +112,79 @@ export default function ConfirmScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Salva um intervalo como DOIS eventos nativos independentes — "Início: X"
+   * na primeira data e "Prazo final: X" na segunda, mesma tag nas duas,
+   * cada um com seu próprio alarme de 30 min (herdado de criarEventoNaAgenda,
+   * sem precisar de nada especial aqui). Decisão de produto: o que importa
+   * pra ela é ser lembrada nas duas pontas do período, não visualizar uma
+   * barra de "evento de vários dias" na agenda nativa.
+   */
+  async function handleSalvarIntervalo() {
+    const inicio = montarData(dataStr, horaStr);
+    const fim = montarData(dataFimStr, horaStr);
+
+    if (!inicio || !fim) {
+      setAviso({ titulo: 'Data inválida', mensagem: 'Confira o formato das duas datas: dd/mm/aaaa e HH:mm.' });
+      return;
+    }
+    if (fim.getTime() < inicio.getTime()) {
+      setAviso({ titulo: 'Datas fora de ordem', mensagem: 'A data final precisa ser igual ou depois da data de início.' });
+      return;
+    }
+
+    setSalvando(true);
+    try {
+      const temPermissao = await pedirPermissao();
+      if (!temPermissao) {
+        setAviso({ titulo: 'Permissão necessária', mensagem: 'O app precisa de acesso à agenda pra salvar o evento.' });
+        return;
+      }
+
+      const tituloBase = titulo.trim();
+      const tagFinal = tag.trim() || null;
+      const descricaoFinal = descricao.trim() || undefined;
+
+      const eventoInicio: NovoEvento = {
+        titulo: `Início: ${tituloBase}`,
+        data: inicio,
+        descricao: descricaoFinal,
+        tag: tagFinal,
+      };
+      const eventoFim: NovoEvento = {
+        titulo: `Prazo final: ${tituloBase}`,
+        data: fim,
+        descricao: descricaoFinal,
+        tag: tagFinal,
+      };
+
+      const idInicio = await criarEventoNaAgenda(eventoInicio);
+      salvarRegistro(idInicio, tagFinal);
+      const idFim = await criarEventoNaAgenda(eventoFim);
+      salvarRegistro(idFim, tagFinal);
+
+      navigation.navigate('Dashboard');
+    } catch (erro) {
+      setAviso({ titulo: 'Erro ao salvar', mensagem: 'Não foi possível salvar os dois eventos do período. Tente novamente.' });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.overline}>{modoEdicao ? 'EDITAR' : 'REVISAR ANTES DE SALVAR'}</Text>
         <Text style={styles.titulo}>{modoEdicao ? 'Editar evento' : 'Confirmar evento'}</Text>
+
+        {ehIntervalo && (
+          <View style={styles.avisoIntervalo}>
+            <Feather name="repeat" size={14} color={theme.colors.accent} />
+            <Text style={styles.avisoIntervaloTexto}>
+              Detectamos um período. Vamos criar dois eventos: um de início e um de prazo final.
+            </Text>
+          </View>
+        )}
 
         <Text style={styles.label}>TÍTULO</Text>
         <TextInput
@@ -122,7 +200,7 @@ export default function ConfirmScreen({ navigation, route }: Props) {
           <View style={styles.inputMetade}>
             <View style={styles.labelComIcone}>
               <Feather name="calendar" size={13} color={theme.colors.textMuted} />
-              <Text style={styles.label}>DATA</Text>
+              <Text style={styles.label}>{ehIntervalo ? 'INÍCIO' : 'DATA'}</Text>
             </View>
             <TextInput
               style={[styles.input, campoFocado === 'data' && styles.inputFocado]}
@@ -150,6 +228,27 @@ export default function ConfirmScreen({ navigation, route }: Props) {
             />
           </View>
         </View>
+
+        {ehIntervalo && (
+          <>
+            <View style={styles.labelComIcone}>
+              <Feather name="flag" size={13} color={theme.colors.textMuted} />
+              <Text style={styles.label}>PRAZO FINAL</Text>
+            </View>
+            <TextInput
+              style={[styles.input, campoFocado === 'dataFim' && styles.inputFocado]}
+              placeholder="dd/mm/aaaa"
+              placeholderTextColor={theme.colors.textMuted}
+              value={dataFimStr}
+              onChangeText={setDataFimStr}
+              onFocus={() => setCampoFocado('dataFim')}
+              onBlur={() => setCampoFocado(null)}
+            />
+            <Text style={styles.dicaHoraCompartilhada}>
+              O horário acima ({horaStr || '08:00'}) é usado nos dois eventos.
+            </Text>
+          </>
+        )}
 
         <Text style={styles.label}>DESCRIÇÃO (OPCIONAL)</Text>
         <TextInput
@@ -246,7 +345,7 @@ export default function ConfirmScreen({ navigation, route }: Props) {
                 />
               )}
               <Text style={styles.botaoPrincipalTexto}>
-                {salvando ? 'Salvando...' : modoEdicao ? 'Salvar alterações' : 'Salvar na agenda'}
+                {salvando ? 'Salvando...' : modoEdicao ? 'Salvar alterações' : ehIntervalo ? 'Criar os 2 eventos' : 'Salvar na agenda'}
               </Text>
             </View>
           </Pressable>
@@ -323,6 +422,27 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     textarea: { minHeight: 64, textAlignVertical: 'top' },
     linhaDupla: { flexDirection: 'row', gap: theme.spacing.sm },
     inputMetade: { flex: 1 },
+    avisoIntervalo: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.xs + 2,
+      backgroundColor: theme.colors.accentSoft,
+      borderRadius: theme.radius.md,
+      padding: theme.spacing.sm + 2,
+      marginBottom: theme.spacing.md,
+    },
+    avisoIntervaloTexto: {
+      ...theme.typography.caption,
+      color: theme.colors.textSecondary,
+      flex: 1,
+      lineHeight: 18,
+    },
+    dicaHoraCompartilhada: {
+      ...theme.typography.caption,
+      color: theme.colors.textMuted,
+      marginTop: -theme.spacing.xs,
+      marginBottom: theme.spacing.md,
+    },
     chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.xs + 2, marginBottom: theme.spacing.lg },
     chip: {
       flexDirection: 'row',

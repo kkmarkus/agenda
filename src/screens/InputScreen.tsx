@@ -31,6 +31,7 @@ export default function InputScreen({ navigation }: Props) {
         titulo: extraido.titulo,
         data: extraido.data ?? undefined,
       },
+      dataFim: extraido.dataFim ?? undefined,
     });
   }
 
