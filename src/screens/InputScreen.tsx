@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Text, TextInput, Pressable, View, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { parseTextoLivre } from '../services/eventParser';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -69,15 +68,10 @@ export default function InputScreen({ navigation }: Props) {
         onPress={handleAnalisarTexto}
         disabled={!textoLivre.trim()}
       >
-        <LinearGradient
-          colors={[theme.colors.gradientStart, theme.colors.gradientEnd]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.botaoPrincipal}
-        >
+        <View style={[styles.botaoPrincipal, { backgroundColor: theme.colors.accent }]}>
           <Text style={styles.botaoPrincipalTexto}>Analisar evento</Text>
           <Feather name="arrow-right" size={17} color={theme.colors.accentText} />
-        </LinearGradient>
+        </View>
       </Pressable>
     </SafeAreaView>
   );

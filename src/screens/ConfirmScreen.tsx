@@ -6,12 +6,10 @@ import {
   Pressable,
   StyleSheet,
   ScrollView,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
   pedirPermissao,
@@ -23,6 +21,7 @@ import { NovoEvento } from '../types/event';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme/ThemeContext';
 import { corDaTag } from '../theme/theme';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 // CORREÇÃO: Props simplificado próprio substituído pelo tipo real de navegação.
 type Props = NativeStackScreenProps<RootStackParamList, 'Confirmar'>;
@@ -43,6 +42,9 @@ export default function ConfirmScreen({ navigation, route }: Props) {
   const [coresPorTag, setCoresPorTag] = useState<Record<string, number>>({});
   const [salvando, setSalvando] = useState(false);
   const [campoFocado, setCampoFocado] = useState<string | null>(null);
+  // Substitui os Alert.alert nativos de validação/erro pelo ConfirmDialog
+  // temático — só um aviso por vez, então basta título + mensagem.
+  const [aviso, setAviso] = useState<{ titulo: string; mensagem: string } | null>(null);
 
   // Autocomplete: carrega as tags já usadas por ela pra sugerir como chips,
   // já com a cor persistida de cada uma (mesma fonte de verdade da TagsScreen).
@@ -55,15 +57,15 @@ export default function ConfirmScreen({ navigation, route }: Props) {
     const data = montarData(dataStr, horaStr);
 
     if (!titulo.trim()) {
-      Alert.alert('Falta o título', 'Digite um título pro evento antes de salvar.');
+      setAviso({ titulo: 'Falta o título', mensagem: 'Digite um título pro evento antes de salvar.' });
       return;
     }
     if (!data) {
-      Alert.alert('Data inválida', 'Confira o formato: dd/mm/aaaa e HH:mm.');
+      setAviso({ titulo: 'Data inválida', mensagem: 'Confira o formato: dd/mm/aaaa e HH:mm.' });
       return;
     }
     if (!tag.trim()) {
-      Alert.alert('Falta a tag', 'Escolha ou digite uma tag pra organizar esse evento.');
+      setAviso({ titulo: 'Falta a tag', mensagem: 'Escolha ou digite uma tag pra organizar esse evento.' });
       return;
     }
 
@@ -71,7 +73,7 @@ export default function ConfirmScreen({ navigation, route }: Props) {
     try {
       const temPermissao = await pedirPermissao();
       if (!temPermissao) {
-        Alert.alert('Permissão necessária', 'O app precisa de acesso à agenda pra salvar o evento.');
+        setAviso({ titulo: 'Permissão necessária', mensagem: 'O app precisa de acesso à agenda pra salvar o evento.' });
         return;
       }
 
@@ -90,7 +92,7 @@ export default function ConfirmScreen({ navigation, route }: Props) {
 
       navigation.navigate('Dashboard');
     } catch (erro) {
-      Alert.alert('Erro ao salvar', 'Não foi possível salvar o evento. Tente novamente.');
+      setAviso({ titulo: 'Erro ao salvar', mensagem: 'Não foi possível salvar o evento. Tente novamente.' });
     } finally {
       setSalvando(false);
     }
@@ -213,12 +215,7 @@ export default function ConfirmScreen({ navigation, route }: Props) {
             onPress={handleSalvar}
             disabled={salvando}
           >
-            <LinearGradient
-              colors={[theme.colors.gradientStart, theme.colors.gradientEnd]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.botaoPrincipal}
-            >
+            <View style={[styles.botaoPrincipal, { backgroundColor: theme.colors.accent }]}>
               {salvando ? (
                 <ActivityIndicator size="small" color={theme.colors.accentText} style={styles.spinner} />
               ) : (
@@ -232,10 +229,20 @@ export default function ConfirmScreen({ navigation, route }: Props) {
               <Text style={styles.botaoPrincipalTexto}>
                 {salvando ? 'Salvando...' : modoEdicao ? 'Salvar alterações' : 'Salvar na agenda'}
               </Text>
-            </LinearGradient>
+            </View>
           </Pressable>
         </View>
       </ScrollView>
+
+      <ConfirmDialog
+        visivel={aviso !== null}
+        titulo={aviso?.titulo ?? ''}
+        mensagem={aviso?.mensagem ?? ''}
+        icone="alert-circle"
+        textoConfirmar="Entendi"
+        onConfirmar={() => setAviso(null)}
+        onFechar={() => setAviso(null)}
+      />
     </SafeAreaView>
   );
 }
@@ -319,6 +326,11 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     botoesRow: { flexDirection: 'row', gap: theme.spacing.sm, marginTop: theme.spacing.xs, marginBottom: theme.spacing.lg },
     botaoSecundario: {
       flex: 1,
+      // Altura fixa (não só padding): "Salvar na agenda"/"Salvar
+      // alterações" quebra em 2 linhas, enquanto "Salvando..." cabe em 1
+      // — sem minHeight, o botão mudava de altura ao trocar de estado.
+      // Aplicamos o mesmo valor nos dois botões pra ficarem sempre iguais.
+      minHeight: 56,
       flexDirection: 'row',
       gap: theme.spacing.xs + 2,
       padding: theme.spacing.md - 2,
@@ -331,6 +343,7 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     botaoSecundarioTexto: { ...theme.typography.bodyMedium, color: theme.colors.textPrimary },
     botaoPrincipalWrapper: { flex: 1 },
     botaoPrincipal: {
+      minHeight: 56,
       flexDirection: 'row',
       borderRadius: theme.radius.md,
       padding: theme.spacing.md - 2,

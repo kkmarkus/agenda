@@ -1,10 +1,9 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, ScrollView, StyleSheet, Alert } from 'react-native';
+import { View, Text, FlatList, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Feather } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import Swipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { buscarEventoDaAgenda, apagarEventoDaAgenda } from '../services/calendarService';
 import { listarRegistros, apagarRegistro, listarCoresDeTags, listarTagsUnicas } from '../services/database';
@@ -13,6 +12,7 @@ import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme/ThemeContext';
 import { corDaTag, TAG_WASH_ALPHA } from '../theme/theme';
 import SkeletonBlock from '../components/SkeletonBlock';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 // CORREÇÃO: antes cada tela declarava seu próprio tipo de Props "simplificado",
 // desalinhado do RootStackParamList real do AppNavigator. Usando
@@ -102,22 +102,24 @@ export default function DashboardScreen({ navigation }: Props) {
     });
   }
 
+  // Estado do evento aguardando confirmação de exclusão — substitui o
+  // Alert.alert nativo (fora do tema, sempre branco/Material) pelo
+  // ConfirmDialog, que segue a paleta do app.
+  const [eventoParaApagar, setEventoParaApagar] = useState<EventoApp | null>(null);
+
   function handleApagar(evento: EventoApp) {
     swipeableRefs.current[evento.id]?.close();
-    Alert.alert('Apagar evento', `Remover "${evento.titulo}" da agenda?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Apagar',
-        style: 'destructive',
-        onPress: async () => {
-          // Sincronizado: apaga dos dois lados, senão o alarme nativo
-          // continua ativo pra um evento que sumiu do app.
-          await apagarEventoDaAgenda(evento.nativeEventId);
-          apagarRegistro(evento.id);
-          carregarEventos();
-        },
-      },
-    ]);
+    setEventoParaApagar(evento);
+  }
+
+  async function confirmarApagar() {
+    if (!eventoParaApagar) return;
+    // Sincronizado: apaga dos dois lados, senão o alarme nativo continua
+    // ativo pra um evento que sumiu do app.
+    await apagarEventoDaAgenda(eventoParaApagar.nativeEventId);
+    apagarRegistro(eventoParaApagar.id);
+    setEventoParaApagar(null);
+    carregarEventos();
   }
 
   const eventosFiltrados = tagAtiva
@@ -281,15 +283,22 @@ export default function DashboardScreen({ navigation }: Props) {
         ]}
         onPress={() => navigation.navigate('Input')}
       >
-        <LinearGradient
-          colors={[theme.colors.gradientStart, theme.colors.gradientEnd]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.botaoNovo}
-        >
+        <View style={[styles.botaoNovo, { backgroundColor: theme.colors.accent }]}>
           <Feather name="plus" size={24} color={theme.colors.accentText} />
-        </LinearGradient>
+        </View>
       </Pressable>
+
+      <ConfirmDialog
+        visivel={eventoParaApagar !== null}
+        titulo="Apagar evento"
+        mensagem={eventoParaApagar ? `Remover "${eventoParaApagar.titulo}" da agenda?` : ''}
+        icone="trash-2"
+        textoCancelar="Cancelar"
+        textoConfirmar="Apagar"
+        destrutivo
+        onConfirmar={confirmarApagar}
+        onFechar={() => setEventoParaApagar(null)}
+      />
     </SafeAreaView>
   );
 }
