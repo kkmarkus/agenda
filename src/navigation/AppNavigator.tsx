@@ -22,7 +22,10 @@ export type RootStackParamList = {
   Dashboard: undefined;
   Input: undefined;
   // nativeEventId presente = modo edição (ConfirmScreen atualiza em vez de criar).
-  Confirmar: { rascunho: Partial<NovoEvento>; nativeEventId?: string };
+  // dataFim presente = o parser detectou um INTERVALO de datas (ver
+  // eventParser.ts) — só faz sentido na criação (nunca em edição, já que
+  // depois de salvo um intervalo vira dois eventos independentes).
+  Confirmar: { rascunho: Partial<NovoEvento>; nativeEventId?: string; dataFim?: Date };
   Tags: undefined;
   // Escolher quais calendários nativos (fora o do app) sincronizar.
   Sincronizar: undefined;
