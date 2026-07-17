@@ -3,12 +3,20 @@
 // datas em dd/mm ou dd/mm/aaaa, "hoje"/"amanhã"/"depois de amanhã",
 // datas por extenso ("4 de agosto"), expressões relativas ("daqui a 3 dias",
 // "semana que vem", "fim de semana que vem"), dias da semana ("sexta",
-// "próxima sexta", "quinta-feira que vem"), e horário em "Xh", "X:XX" ou
+// "próxima sexta", "quinta-feira que vem"), intervalos de datas ("do dia
+// 10 ao dia 20", "de 10 a 15 de agosto"), e horário em "Xh", "X:XX" ou
 // "X horas".
 
 export interface EventoExtraido {
   titulo: string;
   data: Date | null;
+  // Presente só quando o texto descreve um PERÍODO ("do dia X ao dia Y"),
+  // não uma data única. Quando existe, a tela de confirmação mostra dois
+  // campos de data e salva DOIS eventos na agenda nativa (início e prazo
+  // final) em vez de um — ver decisão em resumo-projeto sobre por quê
+  // (o que importa pra ela é ser lembrada nas duas pontas do período, não
+  // uma barra visual de "evento de vários dias").
+  dataFim: Date | null;
   horaEncontrada: boolean; // se não achou hora, o formulário assume um horário padrão
 }
 
@@ -73,6 +81,94 @@ const MESES: Record<string, number> = {
   novembro: 10,
   dezembro: 11,
 };
+
+// Intervalo de datas: "do dia 10 ao dia 20", "de 10 a 15 de agosto",
+// "entre 10 e 20 de julho", "do dia 10/07 ao dia 20/07". Cada lado do
+// intervalo pode ser um número de dia isolado (quando as duas pontas
+// compartilham o mesmo mês, ex: "de 10 a 15 de agosto") ou uma data
+// completa dd/mm(/aaaa) (quando os meses são diferentes, ex: "do dia
+// 28/07 ao dia 3/08"). O mês/ano por extenso no final, se presente, só
+// é usado pra completar os lados que vieram como número de dia isolado —
+// um lado que já veio com "/" (dd/mm) é resolvido sozinho, sem depender
+// dele.
+const REGEX_INTERVALO = new RegExp(
+  '(?:do\\s+dia\\s+|de\\s+|entre\\s+)' +
+    '(\\d{1,2}(?:/\\d{1,2}(?:/\\d{4})?)?)' +
+    '\\s+(?:ao\\s+dia\\s+|at[eé]\\s+(?:o\\s+dia\\s+)?|a\\s+|e\\s+)' +
+    '(\\d{1,2}(?:/\\d{1,2}(?:/\\d{4})?)?)' +
+    '(?:\\s+de\\s+([a-zA-ZÀ-ÿ]+)(?:\\s+de\\s+(\\d{4}))?)?',
+  'i'
+);
+
+/**
+ * Resolve um dos lados do intervalo pra uma Date "bruta" (sem decidir
+ * rollover de ano ainda — isso é feito depois, olhando pro intervalo como
+ * um todo, ver extrairIntervalo). Se o componente já veio com "/" (dd/mm
+ * ou dd/mm/aaaa), ele já é auto-suficiente. Se veio como só um número de
+ * dia, precisa do mês por extenso compartilhado (capturado no final do
+ * REGEX_INTERVALO) pra fazer sentido — sem ele, não dá pra saber o mês, e
+ * a função retorna null (o que faz o intervalo inteiro ser descartado).
+ */
+function interpretarComponenteIntervalo(
+  componente: string,
+  mesExtenso: string | undefined,
+  anoExtenso: string | undefined,
+  agora: Date
+): { data: Date; anoExplicito: boolean } | null {
+  if (componente.includes('/')) {
+    const [diaTexto, mesTexto, anoTexto] = componente.split('/');
+    const anoExplicito = !!anoTexto;
+    const anoFinal = anoExplicito ? Number(anoTexto) : agora.getFullYear();
+    return { data: new Date(anoFinal, Number(mesTexto) - 1, Number(diaTexto)), anoExplicito };
+  }
+
+  if (!mesExtenso) return null;
+  const mesIndice = MESES[removerAcentos(mesExtenso.toLowerCase())];
+  if (mesIndice === undefined) return null;
+
+  const anoExplicito = !!anoExtenso;
+  const anoFinal = anoExplicito ? Number(anoExtenso) : agora.getFullYear();
+  return { data: new Date(anoFinal, mesIndice, Number(componente)), anoExplicito };
+}
+
+function extrairIntervalo(
+  texto: string,
+  agora: Date
+): { inicio: Date; fim: Date; trecho: string } | null {
+  const match = texto.match(REGEX_INTERVALO);
+  if (!match) return null;
+
+  const [trecho, comp1, comp2, mesExtenso, anoExtenso] = match;
+  const inicioBruto = interpretarComponenteIntervalo(comp1, mesExtenso, anoExtenso, agora);
+  const fimBruto = interpretarComponenteIntervalo(comp2, mesExtenso, anoExtenso, agora);
+  if (!inicioBruto || !fimBruto) return null;
+
+  let inicio = inicioBruto.data;
+  let fim = fimBruto.data;
+
+  // BUG ENCONTRADO NO TESTE: aplicar ajustarAnoSeNoPassado em cada lado do
+  // intervalo SEPARADAMENTE quebra o período quando ele já começou mas
+  // ainda não terminou (ex: hoje=16/07, período "10/07 a 20/07" — o início
+  // sozinho parece "no passado" e pulava pra 2027, enquanto o fim ficava em
+  // 2026, invertendo o intervalo inteiro). A decisão de rollover precisa
+  // ser ATÔMICA pro par: olhamos só pro FIM (a ponta mais tardia) — se ele
+  // já passou, o período inteiro é do ano que vem, e as duas pontas pulam
+  // juntas. Se nenhum lado tinha ano explícito, claro: se ela escreveu um
+  // ano, respeitamos exatamente o que foi pedido, mesmo que já tenha passado.
+  const semAnoExplicito = !inicioBruto.anoExplicito && !fimBruto.anoExplicito;
+  if (semAnoExplicito) {
+    const hojeSemHora = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate());
+    const fimSemHora = new Date(fim.getFullYear(), fim.getMonth(), fim.getDate());
+    if (fimSemHora < hojeSemHora) {
+      inicio = new Date(inicio);
+      inicio.setFullYear(inicio.getFullYear() + 1);
+      fim = new Date(fim);
+      fim.setFullYear(fim.getFullYear() + 1);
+    }
+  }
+
+  return { inicio, fim, trecho };
+}
 
 // "daqui a 3 dias", "daqui a 2 semanas", "daqui a 1 mês"
 //
@@ -261,8 +357,47 @@ function extrairHora(texto: string): { hora: number; minuto: number; trecho: str
  * pra não sobrar "reunião dia 20/07 às 14h" como título — só "reunião".
  */
 export function parseTextoLivre(texto: string, agora: Date = new Date()): EventoExtraido {
-  const { data: dataBase, trecho: trechoData } = extrairData(texto, agora);
   const horaInfo = extrairHora(texto);
+
+  // Intervalo tem prioridade sobre data única: se não checássemos isso
+  // primeiro, um texto como "inscrições de 10 a 15 de agosto" cairia na
+  // regra de data por extenso (REGEX_DATA_EXTENSO), que casaria só "15 de
+  // agosto" e deixaria "de 10 a" sobrando feio no título, perdendo a
+  // segunda ponta do período inteiramente.
+  const intervalo = extrairIntervalo(texto, agora);
+  if (intervalo) {
+    let inicio = intervalo.inicio;
+    let fim = intervalo.fim;
+    // A mesma hora encontrada (se houver) se aplica às duas pontas do
+    // período — não faz sentido pedir pra ela escrever a hora duas vezes
+    // pra dizer a mesma coisa. Sem hora: mesmo padrão de 08:00 usado em
+    // eventos de data única.
+    if (horaInfo) {
+      inicio = new Date(inicio);
+      inicio.setHours(horaInfo.hora, horaInfo.minuto, 0, 0);
+      fim = new Date(fim);
+      fim.setHours(horaInfo.hora, horaInfo.minuto, 0, 0);
+    } else {
+      inicio.setHours(8, 0, 0, 0);
+      fim.setHours(8, 0, 0, 0);
+    }
+
+    let titulo = texto.replace(intervalo.trecho, '');
+    if (horaInfo) titulo = titulo.replace(horaInfo.trecho, '');
+    titulo = titulo
+      .replace(REGEX_PALAVRAS_DESCARTAVEIS, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    return {
+      titulo: titulo || texto.trim(),
+      data: inicio,
+      dataFim: fim,
+      horaEncontrada: !!horaInfo,
+    };
+  }
+
+  const { data: dataBase, trecho: trechoData } = extrairData(texto, agora);
 
   let dataFinal = dataBase;
   if (dataFinal && horaInfo) {
@@ -283,6 +418,7 @@ export function parseTextoLivre(texto: string, agora: Date = new Date()): Evento
   return {
     titulo: titulo || texto.trim(),
     data: dataFinal,
+    dataFim: null,
     horaEncontrada: !!horaInfo,
   };
 }
