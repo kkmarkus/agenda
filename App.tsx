@@ -4,39 +4,38 @@
 import 'react-native-gesture-handler';
 
 import React, { useEffect } from 'react';
-import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import {
-  useFonts,
-  NotoSerif_400Regular,
-  NotoSerif_600SemiBold,
-  NotoSerif_700Bold,
-} from '@expo-google-fonts/noto-serif';
-import { YesevaOne_400Regular } from '@expo-google-fonts/yeseva-one';
+import { StatusBar } from 'expo-status-bar';
 import { initDatabase } from './src/services/database';
 import AppNavigator from './src/navigation/AppNavigator';
-import { ThemeProvider } from './src/theme/ThemeContext';
+import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
+
+// CORREÇÃO: as fontes (Noto Serif, Yeseva One e o Feather do
+// @expo/vector-icons) não são mais carregadas via useFonts em runtime.
+// Esse hook baixa/lê os .ttf de forma assíncrona depois que o JS já
+// subiu — funciona no Expo Go, mas é um problema conhecido em builds de
+// release/preview via EAS: se o carregamento falhar ou nunca resolver, o
+// app fica preso pra sempre (indistinguível de uma tela branca travada).
+// Agora as fontes são embutidas como recurso nativo no momento do build,
+// via plugin "expo-font" no app.json — sem race condition, sem depender
+// de nada carregar depois que o app já abriu.
+
+function StatusBarTemaAtual() {
+  // A cor/estilo da status bar segue o tema ativo: ícones escuros sobre
+  // o fundo bege do tema claro, ícones claros sobre o preto do tema
+  // escuro — em vez da barra branca fixa que o Android desenha por
+  // padrão quando não existe nenhum <StatusBar> configurado.
+  const theme = useTheme();
+  return (
+    <StatusBar
+      style={theme.mode === 'dark' ? 'light' : 'dark'}
+      backgroundColor={theme.colors.background}
+    />
+  );
+}
 
 export default function App() {
-  // CORREÇÃO: useFonts devolve [loaded, error]. O código anterior ignorava
-  // o "error" e só olhava "loaded" — se o carregamento da fonte falhasse
-  // por qualquer motivo (comum em builds de produção/preview), "loaded"
-  // nunca virava true, e o app ficava PARA SEMPRE preso na View vazia
-  // abaixo. Isso é indistinguível de uma "tela branca estática": não é
-  // crash nenhum, é o app esperando um evento que nunca chega.
-  // Agora, se der erro no carregamento da fonte, seguimos em frente mesmo
-  // assim (o texto só cai pra fonte padrão do sistema, o que é bem menos
-  // grave que o app nunca abrir).
-  const [fontsLoaded, fontError] = useFonts({
-    NotoSerif_400Regular,
-    NotoSerif_600SemiBold,
-    NotoSerif_700Bold,
-    // Serif retrô/bold usada só nos títulos grandes (tokens "display" e
-    // "heading" do theme.ts).
-    YesevaOne_400Regular,
-  });
-
   // Roda uma vez, ao abrir o app: garante que a tabela existe
   // antes de qualquer tela tentar ler ou escrever nela.
   useEffect(() => {
@@ -49,13 +48,6 @@ export default function App() {
       console.error('Falha ao inicializar o banco local:', erro);
     }
   }, []);
-
-  // Enquanto as fontes não carregam (e não deram erro), mostramos só uma
-  // View vazia em vez de deixar o texto "piscar" com a fonte padrão do
-  // sistema antes de trocar pra Josefin Sans / Fraunces.
-  if (!fontsLoaded && !fontError) {
-    return <View style={{ flex: 1 }} />;
-  }
 
   // CORREÇÃO: react-native-safe-area-context já estava no package.json
   // mas nunca era usado — sem o Provider, useSafeAreaInsets/SafeAreaView
@@ -70,6 +62,7 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <ThemeProvider>
+          <StatusBarTemaAtual />
           <AppNavigator />
         </ThemeProvider>
       </SafeAreaProvider>

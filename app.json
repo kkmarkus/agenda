@@ -30,7 +30,19 @@
         }
       ],
       "expo-asset",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "node_modules/@expo-google-fonts/noto-serif/400Regular/NotoSerif_400Regular.ttf",
+            "node_modules/@expo-google-fonts/noto-serif/600SemiBold/NotoSerif_600SemiBold.ttf",
+            "node_modules/@expo-google-fonts/noto-serif/700Bold/NotoSerif_700Bold.ttf",
+            "node_modules/@expo-google-fonts/yeseva-one/400Regular/YesevaOne_400Regular.ttf",
+            "./assets/fonts/feather.ttf"
+          ]
+        }
+      ]
     ],
     "extra": {
       "eas": {
