@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, Pressable, StyleSheet, Animated, Dimensions, ScrollView } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Animated, Dimensions, ScrollView, Modal } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, useThemeConfig, ModoPreferido } from '../theme/ThemeContext';
@@ -80,52 +80,61 @@ export default function SettingsDrawer({ visivel, onFechar, navigation }: Props)
     navigation.navigate(tela);
   }
 
+  // Modal (nativo do RN, sem lib nova) em vez de só uma View absoluta:
+  // o conteúdo de um Modal renderiza numa camada separada da árvore
+  // principal — por isso ele NÃO é afetado pelo crossfade de opacidade
+  // que o ThemeProvider aplica em toda troca de tema/acento (ver
+  // ThemeContext.tsx). Antes, como o drawer era só uma View normal
+  // dentro da árvore do Dashboard, ele piscava junto com o resto da tela
+  // bem no momento em que a usuária tocava numa cor — o próprio painel
+  // que ela está olhando/usando não devia dar esse "salto".
   return (
-    <View style={styles.overlayContainer} pointerEvents={visivel ? 'auto' : 'none'}>
-      <Animated.View style={[styles.backdrop, { opacity: opacidadeBackdrop }]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onFechar} />
-      </Animated.View>
+    <Modal visible={renderizado} transparent animationType="none" onRequestClose={onFechar}>
+      <View style={styles.overlayContainer} pointerEvents={visivel ? 'auto' : 'none'}>
+        <Animated.View style={[styles.backdrop, { opacity: opacidadeBackdrop }]}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={onFechar} />
+        </Animated.View>
 
-      <Animated.View style={[styles.painel, { transform: [{ translateX }] }]}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.painelConteudo}>
-          <View style={styles.headerRow}>
-            <Text style={styles.headerTitulo}>Configurações</Text>
+        <Animated.View style={[styles.painel, { transform: [{ translateX }] }]}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.painelConteudo}>
+            <View style={styles.headerRow}>
+              <Text style={styles.headerTitulo}>Configurações</Text>
+              <Pressable
+                style={({ pressed }) => [styles.botaoFechar, { opacity: pressed ? 0.6 : 1 }]}
+                onPress={onFechar}
+                hitSlop={10}
+              >
+                <Feather name="x" size={18} color={theme.colors.textSecondary} />
+              </Pressable>
+            </View>
+
+            <Text style={styles.secaoTitulo}>ORGANIZAÇÃO</Text>
             <Pressable
-              style={({ pressed }) => [styles.botaoFechar, { opacity: pressed ? 0.6 : 1 }]}
-              onPress={onFechar}
-              hitSlop={10}
+              style={({ pressed }) => [styles.itemMenu, { opacity: pressed ? 0.7 : 1 }]}
+              onPress={() => irPara('Tags')}
             >
-              <Feather name="x" size={18} color={theme.colors.textSecondary} />
+              <View style={styles.itemIconeCirculo}>
+                <Feather name="tag" size={16} color={theme.colors.accent} />
+              </View>
+              <Text style={styles.itemTexto}>Tags</Text>
+              <Feather name="chevron-right" size={16} color={theme.colors.textMuted} />
             </Pressable>
-          </View>
+            <Pressable
+              style={({ pressed }) => [styles.itemMenu, { opacity: pressed ? 0.7 : 1 }]}
+              onPress={() => irPara('Sincronizar')}
+            >
+              <View style={styles.itemIconeCirculo}>
+                <Feather name="refresh-cw" size={16} color={theme.colors.accent} />
+              </View>
+              <Text style={styles.itemTexto}>Sincronizar calendários</Text>
+              <Feather name="chevron-right" size={16} color={theme.colors.textMuted} />
+            </Pressable>
 
-          <Text style={styles.secaoTitulo}>ORGANIZAÇÃO</Text>
-          <Pressable
-            style={({ pressed }) => [styles.itemMenu, { opacity: pressed ? 0.7 : 1 }]}
-            onPress={() => irPara('Tags')}
-          >
-            <View style={styles.itemIconeCirculo}>
-              <Feather name="tag" size={16} color={theme.colors.accent} />
-            </View>
-            <Text style={styles.itemTexto}>Tags</Text>
-            <Feather name="chevron-right" size={16} color={theme.colors.textMuted} />
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.itemMenu, { opacity: pressed ? 0.7 : 1 }]}
-            onPress={() => irPara('Sincronizar')}
-          >
-            <View style={styles.itemIconeCirculo}>
-              <Feather name="refresh-cw" size={16} color={theme.colors.accent} />
-            </View>
-            <Text style={styles.itemTexto}>Sincronizar calendários</Text>
-            <Feather name="chevron-right" size={16} color={theme.colors.textMuted} />
-          </Pressable>
+            <Text style={[styles.secaoTitulo, styles.secaoComEspaco]}>APARÊNCIA</Text>
 
-          <Text style={[styles.secaoTitulo, styles.secaoComEspaco]}>APARÊNCIA</Text>
-
-          <Text style={styles.rotuloMini}>TEMA</Text>
-          <View style={styles.segmentado}>
-            {OPCOES_MODO.map((opcao) => {
+            <Text style={styles.rotuloMini}>TEMA</Text>
+            <View style={styles.segmentado}>
+              {OPCOES_MODO.map((opcao) => {
               const ativo = modoPreferido === opcao.valor;
               return (
                 <Pressable
@@ -181,7 +190,8 @@ export default function SettingsDrawer({ visivel, onFechar, navigation }: Props)
           </View>
         </ScrollView>
       </Animated.View>
-    </View>
+      </View>
+    </Modal>
   );
 }
 
