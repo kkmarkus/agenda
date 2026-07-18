@@ -420,24 +420,48 @@ export const TAG_WASH_ALPHA = '1F'; // ~12% de opacidade
 
 // Duas paletas separadas — mesma ordem de matiz nas duas (índice 0 =
 // azul, 1 = verde, etc.), dessaturadas/"jewel" pra não competir com o
-// rosa da marca (que é território exclusivo do accent). Contraste
-// calibrado pro fundo de cada tema.
+// acento escolhido (que é território exclusivo do accent, seja qual for
+// o preset ativo). Contraste calibrado pro fundo de cada tema.
+//
+// Ordem = roda de cor completa (terracota ~26° até cereja ~350°), 12
+// cores sem buracos grandes de matiz — não mais a ordem avulsa de
+// quando só existiam 6. Cada `text` do modo escuro é calibrado no
+// PRÓPRIO matiz da cor (mesmo `base`, saturação ~55%, luminosidade
+// ~11%) em vez de reaproveitar um tom genérico emprestado de outra
+// paleta — é o que dava aquela sensação de "resíduo" de um tema antigo.
+//
+// Atenção: o índice gravado no banco por tag é a posição neste array —
+// reordenar/inserir aqui muda a cor de tags já existentes. Aceitável
+// nesta fase (app ainda em desenvolvimento), mas não fazer de novo sem
+// avisar depois que houver instalações reais em uso.
 export const TAG_PALETTE_LIGHT: CorTag[] = [
-  { base: '#3B5D7A', text: '#FFFFFF' }, // azul petróleo
-  { base: '#4A7A5C', text: '#FFFFFF' }, // verde musgo
-  { base: '#6E5A8C', text: '#FFFFFF' }, // ameixa
   { base: '#A3612E', text: '#FFFFFF' }, // terracota
-  { base: '#76335C', text: '#FFFFFF' }, // royal plum
   { base: '#8A7325', text: '#FFFFFF' }, // bronze
+  { base: '#5E6A39', text: '#FFFFFF' }, // oliva
+  { base: '#476A3E', text: '#FFFFFF' }, // grama
+  { base: '#4A7A5C', text: '#FFFFFF' }, // verde musgo
+  { base: '#3B6D61', text: '#FFFFFF' }, // jade
+  { base: '#3B5D7A', text: '#FFFFFF' }, // azul petróleo
+  { base: '#494F8D', text: '#FFFFFF' }, // índigo
+  { base: '#6E5A8C', text: '#FFFFFF' }, // ameixa
+  { base: '#6E467C', text: '#FFFFFF' }, // uva
+  { base: '#76335C', text: '#FFFFFF' }, // royal plum
+  { base: '#743943', text: '#FFFFFF' }, // cereja
 ];
 
 export const TAG_PALETTE_DARK: CorTag[] = [
-  { base: '#7FA8C9', text: '#0B1D28' }, // azul petróleo
-  { base: '#8FC4A0', text: '#0C2414' }, // verde musgo
-  { base: '#B7A2D6', text: '#221A34' }, // ameixa
   { base: '#D99A63', text: '#331D08' }, // terracota
-  { base: '#E3A9C8', text: '#33121A' }, // royal plum (clareado pro preto)
   { base: '#C7B15C', text: '#332B08' }, // bronze
+  { base: '#A6B47E', text: '#232B0D' }, // oliva
+  { base: '#8AB181', text: '#122B0D' }, // grama
+  { base: '#8FC4A0', text: '#0C2414' }, // verde musgo
+  { base: '#85B7AB', text: '#0D2B24' }, // jade
+  { base: '#7FA8C9', text: '#0B1D28' }, // azul petróleo
+  { base: '#9599C6', text: '#0D0F2B' }, // índigo
+  { base: '#B7A2D6', text: '#221A34' }, // ameixa
+  { base: '#B492BF', text: '#240D2B' }, // uva
+  { base: '#E3A9C8', text: '#33121A' }, // royal plum
+  { base: '#C28E97', text: '#2B0D12' }, // cereja
 ];
 
 export function corDaTag(index: number, modo: 'light' | 'dark'): CorTag {
