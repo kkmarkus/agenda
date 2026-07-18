@@ -1,16 +1,19 @@
 // Tokens de design centralizados. Nenhuma cor, espaçamento, raio ou fonte
 // deve ficar hardcoded nas telas — tudo vem daqui via useTheme().
 //
-// LINGUAGEM VISUAL: paleta base "Royal Plum" — Royal Plum (#76335C) como
-// tinta de texto/título e Antique White (#FEEBDA) como base do fundo claro
-// (AMOLED puro no escuro) continuam FIXOS, é a identidade visual do app.
-// O que MUDOU nesta etapa: a cor de destaque (antes só Bubblegum Tint
-// #FE86AA, fixa) agora é escolhível entre vários "presets de acento" —
-// ver ACCENT_PRESETS mais abaixo — porque o app deixou de ser feito sob
-// medida só pra uma pessoa e precisa deixar espaço pro gosto de cada uma.
-// Título, fundo, bordas e texto continuam sempre no mesmo tom (é o que dá
-// consistência de marca); só o destaque (botão principal, FAB, foco de
-// input, chip selecionado, glow) muda com o preset escolhido.
+// LINGUAGEM VISUAL (revisada): o app deixou de ter uma tinta de marca fixa
+// (Royal Plum). Fundo, superfície, borda e texto agora são GERADOS a
+// partir do matiz do preset de acento escolhido — se a usuária escolhe
+// Royal (azul), fundo/bordas/título/texto ficam todos numa variação de
+// azul; se escolhe Framboesa, todos ficam numa variação de rosa. Só
+// luminosidade/saturação de cada camada são fixas (é o que dá a
+// hierarquia visual sempre igual, ex. "borda sempre mais escura que
+// superfície"); o matiz em si vem do preset. Grafite é a exceção
+// deliberada: satura muito pouco esses mesmos tokens, pra ser a opção
+// "sem cor" de propósito. Preto AMOLED no modo escuro continua fixo (é
+// economia de bateria real, não teria sentido tingir isso). Vermelho de
+// urgência e verde de sucesso também continuam fixos nos dois modos —
+// são cores de status, não decorativas, não devem mudar com o acento.
 
 export type ThemeColors = {
   background: string;
@@ -93,51 +96,123 @@ const typography = {
   overline: { fontFamily: 'NotoSerif_700Bold', fontSize: 11, letterSpacing: 1.4 },
 };
 
-// --- Neutros base: fixos, independentes do acento escolhido ---
-// Fundo, superfícies, bordas, texto, urgência e sucesso são a identidade
-// visual do app e não mudam com o preset de cor — só o acento muda.
-type NeutrosBase = Omit<
+// --- Utilitários de cor: só o necessário pra gerar neutros por matiz ---
+function hexParaHsl(hex: string): { h: number; s: number; l: number } {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l: l * 100 };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h: number;
+  switch (max) {
+    case r:
+      h = (g - b) / d + (g < b ? 6 : 0);
+      break;
+    case g:
+      h = (b - r) / d + 2;
+      break;
+    default:
+      h = (r - g) / d + 4;
+  }
+  return { h: h * 60, s: s * 100, l: l * 100 };
+}
+
+function hslParaHex(h: number, s: number, l: number): string {
+  const sN = s / 100;
+  const lN = l / 100;
+  const c = (1 - Math.abs(2 * lN - 1)) * sN;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = lN - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const toHex = (v: number) =>
+    Math.round((v + m) * 255)
+      .toString(16)
+      .padStart(2, '0')
+      .toUpperCase();
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+type NeutrosHue = Omit<
   ThemeColors,
-  'accent' | 'accentText' | 'accentSoft' | 'gradientStart' | 'gradientEnd'
+  'accent' | 'accentText' | 'accentSoft' | 'gradientStart' | 'gradientEnd' | 'urgent' | 'urgentBg' | 'success'
 >;
 
-const neutrosLight: NeutrosBase = {
-  // Antique White como base — quente, "papel envelhecido", não branco
-  // puro. surface/surfaceElevated dão dois degraus de profundidade
-  // acima do fundo, sem precisar de sombra pesada.
-  background: '#FEEBDA',
-  surface: '#FADFC7',
-  surfaceElevated: '#FFF8EF',
-  border: '#F0D2AE',
-  borderStrong: '#E3BD91',
-  // Royal Plum como tinta de texto — amarra a cor de marca direto na
-  // hierarquia tipográfica, em vez de um cinza neutro genérico.
-  textPrimary: '#5C2749',
-  textSecondary: '#8A5670',
-  textMuted: '#B98CA0',
+/**
+ * Gera os 8 tokens de "camada" (fundo/superfície/borda/texto) a partir de
+ * UM matiz — o do preset de acento escolhido. Luminosidade/saturação de
+ * cada camada são fixas por modo (é o que garante hierarquia visual
+ * sempre igual, ex. borda sempre mais escura que superfície), só o matiz
+ * muda. `intensidade` reduz a saturação pro preset Grafite (0.15), que é
+ * a opção deliberadamente "sem cor" — os outros presets usam 1.
+ */
+function gerarNeutros(hue: number, modo: 'light' | 'dark', intensidade: number): NeutrosHue {
+  if (modo === 'light') {
+    return {
+      // Fundo/superfície claros continuam um "papel" com corpo (não
+      // branco puro) — só que agora o tom desse papel é o do preset.
+      background: hslParaHex(hue, 38 * intensidade, 93),
+      surface: hslParaHex(hue, 42 * intensidade, 88),
+      surfaceElevated: hslParaHex(hue, 30 * intensidade, 97),
+      border: hslParaHex(hue, 50 * intensidade, 81),
+      borderStrong: hslParaHex(hue, 55 * intensidade, 71),
+      textPrimary: hslParaHex(hue, 45 * intensidade, 27),
+      textSecondary: hslParaHex(hue, 28 * intensidade, 40),
+      textMuted: hslParaHex(hue, 26 * intensidade, 64),
+    };
+  }
+  return {
+    // Fundo continua preto puro (AMOLED) sempre, independente do preset —
+    // tingir o preto não faria diferença visual e tira a economia de
+    // bateria de ser um preto "de verdade".
+    background: '#000000',
+    surface: hslParaHex(hue, 24 * intensidade, 7),
+    surfaceElevated: hslParaHex(hue, 24 * intensidade, 10.5),
+    border: hslParaHex(hue, 24 * intensidade, 18),
+    borderStrong: hslParaHex(hue, 24 * intensidade, 24),
+    textPrimary: hslParaHex(hue, 35 * intensidade, 90),
+    textSecondary: hslParaHex(hue, 25 * intensidade, 71),
+    textMuted: hslParaHex(hue, 18 * intensidade, 48),
+  };
+}
+
+// --- Cores semânticas: fixas nos dois modos, não seguem o acento ---
+// Urgência (vermelho) e sucesso (verde) são status, não decoração — se
+// mudassem de matiz junto com o preset escolhido (ex. alguém escolhe um
+// preset vermelho e o "urgente" deixa de destoar do resto da tela), a
+// própria função de alerta visual se perderia.
+type Semanticas = { urgent: string; urgentBg: string; success: string };
+
+const semanticasLight: Semanticas = {
   urgent: '#C1473B',
   urgentBg: '#FBE4DF',
   success: '#4B7A52',
 };
 
-const neutrosDark: NeutrosBase = {
-  // AMOLED: fundo preto puro (pixels desligados na tela = economia de
-  // bateria real, e contraste máximo).
-  background: '#000000',
-  surface: '#160D13',
-  surfaceElevated: '#21131C',
-  border: '#3A2130',
-  borderStrong: '#4E2C40',
-  textPrimary: '#FBEEE1',
-  textSecondary: '#CBA1B6',
-  textMuted: '#8C6478',
+const semanticasDark: Semanticas = {
   urgent: '#E58A78',
   urgentBg: '#2B1712',
   success: '#7FB088',
 };
 
-const shadowLight = { color: '#5C2749', opacity: 0.08, radius: 14, offsetY: 4 };
-const shadowDark = { color: '#000000', opacity: 0, radius: 0, offsetY: 0 };
+// Escuro não usa sombra de verdade (invisível sobre AMOLED, a profundidade
+// ali vem da diferença entre background/surface/surfaceElevated) — só o
+// claro precisa de opacidade > 0. A cor em si é preenchida em criarTema()
+// com o textPrimary já gerado pro matiz do preset (mais escuro = boa cor
+// de sombra "de graça", sem hardcodear plum de novo).
+const shadowConfigLight = { opacity: 0.08, radius: 14, offsetY: 4 };
+const shadowConfigDark = { color: '#000000', opacity: 0, radius: 0, offsetY: 0 };
 
 // --- Presets de acento: a cor de destaque escolhível pela usuária ---
 // Cada preset define os 5 tokens que dependem do acento, pros dois modos
@@ -368,18 +443,26 @@ export function obterAccentPreset(id: string): AccentPreset {
 
 /**
  * Monta o Theme completo (mesmo shape de sempre — nenhuma tela precisa
- * mudar) combinando os neutros fixos do modo com os tokens do preset de
- * acento escolhido.
+ * mudar) combinando os neutros GERADOS a partir do matiz do preset
+ * escolhido com os tokens específicos de acento do próprio preset.
  */
 export function criarTema(modo: 'light' | 'dark', preset: AccentPreset): Theme {
-  const neutros = modo === 'dark' ? neutrosDark : neutrosLight;
+  // Matiz sempre tirado da versão clara do preset — claro e escuro do
+  // mesmo preset já são desenhados pra ser a mesma família de cor, então
+  // não precisa (nem deve) recalcular por modo.
+  const { h: matiz } = hexParaHsl(preset.light.accent);
+  const intensidade = preset.id === 'grafite' ? 0.15 : 1;
+  const neutros = gerarNeutros(matiz, modo, intensidade);
+  const semanticas = modo === 'dark' ? semanticasDark : semanticasLight;
   const acento = modo === 'dark' ? preset.dark : preset.light;
-  const shadow = modo === 'dark' ? shadowDark : shadowLight;
+  const shadow =
+    modo === 'dark' ? shadowConfigDark : { color: neutros.textPrimary, ...shadowConfigLight };
 
   return {
     mode: modo,
     colors: {
       ...neutros,
+      ...semanticas,
       accent: acento.accent,
       accentText: acento.accentText,
       accentSoft: acento.accentSoft,
