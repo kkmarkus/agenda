@@ -27,6 +27,10 @@ export function initDatabase(): void {
       calendar_id TEXT PRIMARY KEY,
       ativo INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS preferencias (
+      chave TEXT PRIMARY KEY,
+      valor TEXT NOT NULL
+    );
   `);
 
   migrarTagParaOpcional();
@@ -210,5 +214,24 @@ export function definirSincronizacaoDoCalendario(calendarId: string, ativo: bool
     `INSERT INTO calendarios_sync (calendar_id, ativo) VALUES (?, ?)
      ON CONFLICT(calendar_id) DO UPDATE SET ativo = excluded.ativo;`,
     [calendarId, ativo ? 1 : 0]
+  );
+}
+
+// --- Preferências gerais (tema, cor de destaque, etc.) ---
+// Tabela chave/valor genérica: qualquer preferência simples de app que
+// precise persistir entre aberturas usa isso, sem precisar de uma tabela
+// dedicada nova pra cada preferência futura (tema e cor de acento hoje;
+// o que mais surgir amanhã reaproveita o mesmo par de funções).
+
+export function obterPreferencia(chave: string): string | null {
+  const linha = db.getFirstSync<{ valor: string }>(`SELECT valor FROM preferencias WHERE chave = ?;`, [chave]);
+  return linha ? linha.valor : null;
+}
+
+export function definirPreferencia(chave: string, valor: string): void {
+  db.runSync(
+    `INSERT INTO preferencias (chave, valor) VALUES (?, ?)
+     ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor;`,
+    [chave, valor]
   );
 }
