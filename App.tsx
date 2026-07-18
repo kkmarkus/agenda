@@ -3,7 +3,7 @@
 // nativo antes de qualquer outra coisa carregar.
 import 'react-native-gesture-handler';
 
-import React, { useEffect } from 'react';
+import React from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -21,6 +21,25 @@ import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
 // via plugin "expo-font" no app.json — sem race condition, sem depender
 // de nada carregar depois que o app já abriu.
 
+// CORREÇÃO: initDatabase() rodava dentro de um useEffect do componente
+// App. Isso ficou tarde demais a partir desta etapa: o ThemeProvider
+// agora lê preferências (tema/cor de acento) do banco JÁ NA PRIMEIRA
+// RENDERIZAÇÃO (estado inicial, não um efeito) pra evitar um "flash" da
+// cor errada. Só que efeitos de componentes FILHOS disparam antes do
+// efeito do componente PAI na ordem de commit do React — então o
+// ThemeProvider (filho) tentaria ler a tabela `preferencias` antes do
+// useEffect do App (pai) ter chance de criá-la, e quebraria. Rodar a
+// inicialização aqui, em escopo de módulo, garante que ela acontece antes
+// de QUALQUER componente montar, sem depender da ordem de efeitos.
+try {
+  initDatabase();
+} catch (erro) {
+  // Não deixamos uma falha aqui travar o app silenciosamente — melhor
+  // logar e seguir (as telas que dependem do banco já tratam listas
+  // vazias normalmente) do que ficar preso sem explicação nenhuma.
+  console.error('Falha ao inicializar o banco local:', erro);
+}
+
 function StatusBarTemaAtual() {
   // A cor/estilo da status bar segue o tema ativo: ícones escuros sobre
   // o fundo bege do tema claro, ícones claros sobre o preto do tema
@@ -36,19 +55,6 @@ function StatusBarTemaAtual() {
 }
 
 export default function App() {
-  // Roda uma vez, ao abrir o app: garante que a tabela existe
-  // antes de qualquer tela tentar ler ou escrever nela.
-  useEffect(() => {
-    try {
-      initDatabase();
-    } catch (erro) {
-      // Não deixamos uma falha aqui travar o app silenciosamente — melhor
-      // logar e seguir (as telas que dependem do banco já tratam listas
-      // vazias normalmente) do que ficar preso sem explicação nenhuma.
-      console.error('Falha ao inicializar o banco local:', erro);
-    }
-  }, []);
-
   // CORREÇÃO: react-native-safe-area-context já estava no package.json
   // mas nunca era usado — sem o Provider, useSafeAreaInsets/SafeAreaView
   // nas telas não funcionam, e o conteúdo pode ficar colado na status bar

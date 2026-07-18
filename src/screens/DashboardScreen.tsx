@@ -22,6 +22,7 @@ import { useTheme } from '../theme/ThemeContext';
 import { corDaTag, TAG_WASH_ALPHA } from '../theme/theme';
 import SkeletonBlock from '../components/SkeletonBlock';
 import ConfirmDialog from '../components/ConfirmDialog';
+import SettingsDrawer from '../components/SettingsDrawer';
 
 // CORREÇÃO: antes cada tela declarava seu próprio tipo de Props "simplificado",
 // desalinhado do RootStackParamList real do AppNavigator. Usando
@@ -52,6 +53,7 @@ export default function DashboardScreen({ navigation }: Props) {
   const [tagAtiva, setTagAtiva] = useState<string | null>(null); // null = "Todas"
   const [carregando, setCarregando] = useState(true);
   const [coresPorTag, setCoresPorTag] = useState<Record<string, number>>({});
+  const [menuAberto, setMenuAberto] = useState(false);
 
   // Cada linha da lista tem seu próprio Swipeable; guardamos as refs pra
   // poder fechar as outras quando uma nova é aberta (senão várias linhas
@@ -197,24 +199,23 @@ export default function DashboardScreen({ navigation }: Props) {
           <Text style={styles.titulo}>Agenda</Text>
         </View>
         <View style={styles.headerAcoes}>
+          {/* MUDANÇA: os acessos a Tags e Sincronizar deixaram de ter ícone
+              próprio no cabeçalho — agora vivem dentro do menu de
+              configurações (SettingsDrawer), junto com aparência (tema e
+              cor de destaque). Um cabeçalho que ganhasse um ícone novo a
+              cada configuração futura ficaria poluído; um menu central
+              escala melhor conforme mais opções forem entrando. */}
           <Pressable
             style={({ pressed }) => [styles.botaoTags, { opacity: pressed ? 0.6 : 1 }]}
-            onPress={() => navigation.navigate('Sincronizar')}
+            onPress={() => setMenuAberto(true)}
             hitSlop={10}
           >
-            <Feather name="refresh-cw" size={17} color={theme.colors.textSecondary} />
-          </Pressable>
-          {/* Único acesso à tela de Tags agora — ela só serve pra gerenciar
-              a cor de cada tag, já que o filtro passou a viver aqui embaixo. */}
-          <Pressable
-            style={({ pressed }) => [styles.botaoTags, { opacity: pressed ? 0.6 : 1 }]}
-            onPress={() => navigation.navigate('Tags')}
-            hitSlop={10}
-          >
-            <Feather name="tag" size={18} color={theme.colors.textSecondary} />
+            <Feather name="settings" size={18} color={theme.colors.textSecondary} />
           </Pressable>
         </View>
       </View>
+
+      <SettingsDrawer visivel={menuAberto} onFechar={() => setMenuAberto(false)} navigation={navigation} />
 
       {!carregando && eventos.length > 0 && (
         <View style={styles.resumoRow}>
