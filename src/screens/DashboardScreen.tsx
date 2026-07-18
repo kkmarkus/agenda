@@ -334,9 +334,9 @@ export default function DashboardScreen({ navigation }: Props) {
                         <Text style={[styles.cardData, urgente && styles.cardDataUrgente]}>
                           {formatarDataLegivel(item.data)}
                         </Text>
-                        <View style={styles.cardTagPill}>
+                        <View style={[styles.cardTagPill, item.tag && { backgroundColor: cor.base + TAG_WASH_ALPHA }]}>
                           <View style={[styles.cardTagBolinha, { backgroundColor: cor.base }]} />
-                          <Text style={styles.cardTagTexto} numberOfLines={1}>
+                          <Text style={[styles.cardTagTexto, item.tag && { color: cor.base }]} numberOfLines={1}>
                             {item.tag ?? SEM_TAG_LABEL}
                           </Text>
                         </View>
@@ -488,9 +488,9 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       shadowOffset: { width: 0, height: theme.shadow.offsetY },
       elevation: theme.shadow.opacity > 0 ? 2 : 0,
     },
-    // Traço lateral fino — a cor da tag vira um detalhe editorial, não
-    // mais uma faixa grossa nem um fundo colorido no card inteiro.
-    faixa: { width: 3 },
+    // Traço lateral — grosso o bastante pra cor ser reconhecível de
+    // relance, sem virar um fundo colorido no card inteiro.
+    faixa: { width: 6 },
     cardConteudo: {
       flex: 1,
       flexDirection: 'row',
@@ -508,8 +508,13 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       alignItems: 'center',
       gap: 5,
       maxWidth: 110,
+      paddingVertical: 2,
+      paddingHorizontal: 7,
+      borderRadius: theme.radius.pill,
     },
     cardTagBolinha: { width: 6, height: 6, borderRadius: 3 },
+    // Cor padrão (sem tag) continua neutra — a versão colorida é
+    // aplicada por cima, inline, só quando o evento tem tag de verdade.
     cardTagTexto: { ...theme.typography.caption, color: theme.colors.textMuted },
     cardDias: { ...theme.typography.caption, color: theme.colors.textSecondary },
     cardDiasUrgente: { color: theme.colors.urgent, fontFamily: theme.typography.bodyMedium.fontFamily },
