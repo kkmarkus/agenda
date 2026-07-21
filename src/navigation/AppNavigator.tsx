@@ -4,10 +4,10 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import InputScreen from '../screens/InputScreen';
 import ConfirmScreen from '../screens/ConfirmScreen';
+import ConfirmMultiplosScreen from '../screens/ConfirmMultiplosScreen';
 import DashboardScreen from '../screens/DashboardScreen';
-import TagsScreen from '../screens/TagsScreen';
-import CalendarSyncScreen from '../screens/CalendarSyncScreen';
 import { NovoEvento } from '../types/event';
+import type { EventoExtraido } from '../services/eventParser';
 
 // Centraliza as telas e os parâmetros que cada uma espera receber.
 // Este é o tipo oficial de navegação: todas as telas usam
@@ -25,10 +25,28 @@ export type RootStackParamList = {
   // dataFim presente = o parser detectou um INTERVALO de datas (ver
   // eventParser.ts) — só faz sentido na criação (nunca em edição, já que
   // depois de salvo um intervalo vira dois eventos independentes).
-  Confirmar: { rascunho: Partial<NovoEvento>; nativeEventId?: string; dataFim?: Date };
-  Tags: undefined;
-  // Escolher quais calendários nativos (fora o do app) sincronizar.
-  Sincronizar: undefined;
+  // ocorrencia presente = ela escolheu editar um evento recorrente e já
+  // decidiu o escopo ("Somente este" ou "Este e os futuros" — ver
+  // DashboardScreen). instanceStartDate é o início ORIGINAL da ocorrência
+  // carregada, não o valor (possivelmente editado) do campo de data na
+  // tela — precisa ser fixo pra mirar corretamente na agenda nativa.
+  Confirmar: {
+    rascunho: Partial<NovoEvento>;
+    nativeEventId?: string;
+    dataFim?: Date;
+    ocorrencia?: { instanceStartDate: Date; futureEvents: boolean };
+  };
+  // MUDANÇA (item 3): destino quando `parseMultiplosEventos` encontra mais
+  // de um evento num único texto — lista de revisão em lote, cada item
+  // editável antes de confirmar todos de uma vez. Só existe na criação
+  // (nunca chega aqui vinda de uma edição).
+  ConfirmarMultiplos: {
+    eventos: EventoExtraido[];
+  };
+  // MUDANÇA (item 7): Tags e Sincronizar deixaram de ser rotas — viraram
+  // painéis empilhados abertos de dentro do SettingsDrawer
+  // (TagsPanelContent/CalendarSyncPanelContent), sem navegação de tela
+  // cheia. Ver SettingsDrawer.tsx.
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -43,8 +61,7 @@ export default function AppNavigator() {
         <Stack.Screen name="Dashboard" component={DashboardScreen} />
         <Stack.Screen name="Input" component={InputScreen} />
         <Stack.Screen name="Confirmar" component={ConfirmScreen} />
-        <Stack.Screen name="Tags" component={TagsScreen} />
-        <Stack.Screen name="Sincronizar" component={CalendarSyncScreen} />
+        <Stack.Screen name="ConfirmarMultiplos" component={ConfirmMultiplosScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
