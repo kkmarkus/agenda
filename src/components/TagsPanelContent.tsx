@@ -1,37 +1,47 @@
-import React, { useCallback, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Feather } from '@expo/vector-icons';
-import { contarPorTag, listarCoresDeTags, definirCorDaTag, SEM_TAG_LABEL } from '../services/database';
-import type { RootStackParamList } from '../navigation/AppNavigator';
+import {
+  contarPorTag,
+  listarCoresDeTags,
+  definirCorDaTag,
+  renomearOuMesclarTag,
+  apagarTagDeTodosOsEventos,
+  SEM_TAG_LABEL,
+} from '../services/database';
 import { useTheme } from '../theme/ThemeContext';
 import { corDaTag, TAG_WASH_ALPHA } from '../theme/theme';
-import TagColorPicker from '../components/TagColorPicker';
+import TagColorPicker from './TagColorPicker';
+import ConfirmDialog from './ConfirmDialog';
 
-// CORREÇÃO: mesmo problema das outras telas — Props simplificado próprio
-// substituído pelo tipo real de navegação.
-type Props = NativeStackScreenProps<RootStackParamList, 'Tags'>;
-
-// MUDANÇA: essa tela deixou de ser um "seletor de filtro" (isso agora
-// vive nas abas do Dashboard) — o único papel dela agora é gerenciar a
-// cor de cada tag. Por isso o toque simples no card já abre o seletor de
-// cor direto, sem precisar de toque longo.
-export default function TagsScreen({ navigation }: Props) {
+// MUDANÇA (item 7): mesmo conteúdo que antes vivia em TagsScreen.tsx,
+// extraído pra um componente sem depender de NativeStackScreenProps nem de
+// navegação — chama as mesmas funções de database.ts de sempre, só que
+// agora renderizado dentro de um SlidePanel empilhado em vez de uma tela
+// cheia. `useFocusEffect` (que dependia do ciclo de vida de uma rota) virou
+// um `useEffect` de montagem simples: como o componente só existe enquanto
+// o painel está aberto, montar de novo a cada abertura já cobre o caso de
+// "uma tag nova pode ter sido criada desde a última visita".
+//
+// CORREÇÃO (remoção do botão de voltar): saía junto do "arrow-left" que
+// havia no cabeçalho — sair deste painel agora depende só do backdrop ou
+// do voltar nativo do Android (ver `fecharUmNivel` em SettingsDrawer.tsx),
+// então este componente não precisa mais de uma prop de navegação própria.
+export default function TagsPanelContent() {
   const theme = useTheme();
-  const styles = criarStyles(theme);
+  const styles = useMemo(() => criarStyles(theme), [theme]);
   const [tags, setTags] = useState<{ tag: string | null; total: number }[]>([]);
   const [coresPorTag, setCoresPorTag] = useState<Record<string, number>>({});
   const [tagEmEdicao, setTagEmEdicao] = useState<string | null>(null);
+  // MUDANÇA (9.2): separado de tagEmEdicao pra poder mostrar o
+  // ConfirmDialog destrutivo DEPOIS de fechar o TagColorPicker — dois
+  // modais abertos ao mesmo tempo (um por cima do outro) funcionaria, mas
+  // fica visualmente mais limpo fechar um antes de abrir o outro.
+  const [tagParaApagar, setTagParaApagar] = useState<string | null>(null);
 
-  // Mesma lógica do Dashboard: recarrega toda vez que a tela ganha foco,
-  // já que uma tag nova pode ter sido criada desde a última visita.
-  useFocusEffect(
-    useCallback(() => {
-      carregar();
-    }, [])
-  );
+  useEffect(() => {
+    carregar();
+  }, []);
 
   function carregar() {
     setTags(contarPorTag());
@@ -49,21 +59,34 @@ export default function TagsScreen({ navigation }: Props) {
     setTagEmEdicao(null);
   }
 
-  // "Sem tag" não é uma tag de verdade — não faz sentido ela escolher uma
-  // cor pra "ausência de tag". Separamos esse grupo da lista editável e
-  // mostramos só a contagem, como uma informação, não um card tocável.
+  // MUDANÇA (9.2): renomear (ou, se o nome novo já existir, mesclar
+  // automaticamente com a tag existente — ver renomearOuMesclarTag).
+  function handleRenomear(novoNome: string) {
+    if (!tagEmEdicao) return;
+    renomearOuMesclarTag(tagEmEdicao, novoNome);
+    setTagEmEdicao(null);
+    carregar(); // recarrega contagens/cores do zero: mesclagem pode ter reduzido o total de tags
+  }
+
+  function handleSolicitarApagar() {
+    if (!tagEmEdicao) return;
+    // Fecha o picker de cor e abre a confirmação destrutiva em seu lugar.
+    setTagParaApagar(tagEmEdicao);
+    setTagEmEdicao(null);
+  }
+
+  function handleConfirmarApagar() {
+    if (!tagParaApagar) return;
+    apagarTagDeTodosOsEventos(tagParaApagar);
+    setTagParaApagar(null);
+    carregar();
+  }
+
   const tagsReais = tags.filter((t): t is { tag: string; total: number } => t.tag !== null);
   const grupoSemTag = tags.find((t) => t.tag === null);
 
   const cabecalho = (
     <View style={styles.headerTopRow}>
-      <Pressable
-        style={({ pressed }) => [styles.voltar, { opacity: pressed ? 0.6 : 1 }]}
-        onPress={() => navigation.goBack()}
-        hitSlop={10}
-      >
-        <Feather name="arrow-left" size={18} color={theme.colors.textSecondary} />
-      </Pressable>
       <View>
         <Text style={styles.overline}>ORGANIZAÇÃO</Text>
         <Text style={styles.titulo}>Tags</Text>
@@ -73,7 +96,7 @@ export default function TagsScreen({ navigation }: Props) {
 
   if (tagsReais.length === 0 && !grupoSemTag) {
     return (
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <View style={styles.container}>
         {cabecalho}
         <View style={styles.vazioContainer}>
           <View style={styles.vazioIconeCirculo}>
@@ -83,12 +106,12 @@ export default function TagsScreen({ navigation }: Props) {
             Novas tags aparecem aqui automaticamente conforme você as usa nos eventos.
           </Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <View style={styles.container}>
       {cabecalho}
       <Text style={styles.subtitulo}>Toque numa tag pra trocar a cor dela</Text>
 
@@ -151,26 +174,34 @@ export default function TagsScreen({ navigation }: Props) {
             : 0
         }
         onSelecionar={handleTrocarCor}
+        onRenomear={handleRenomear}
+        onSolicitarApagar={handleSolicitarApagar}
         onFechar={() => setTagEmEdicao(null)}
       />
-    </SafeAreaView>
+
+      <ConfirmDialog
+        visivel={tagParaApagar !== null}
+        titulo="Apagar tag"
+        mensagem={
+          tagParaApagar
+            ? `Apagar a tag "${tagParaApagar}"? Os eventos não são apagados, só deixam de ter essa tag.`
+            : ''
+        }
+        icone="trash-2"
+        destrutivo
+        textoCancelar="Cancelar"
+        textoConfirmar="Apagar"
+        onConfirmar={handleConfirmarApagar}
+        onFechar={() => setTagParaApagar(null)}
+      />
+    </View>
   );
 }
 
 function criarStyles(theme: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
-    container: { flex: 1, padding: theme.spacing.lg, backgroundColor: theme.colors.background },
+    container: { flex: 1, padding: theme.spacing.lg, paddingTop: theme.spacing.xl },
     headerTopRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, marginBottom: theme.spacing.xs },
-    voltar: {
-      width: 34,
-      height: 34,
-      borderRadius: theme.radius.pill,
-      backgroundColor: theme.colors.surface,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
     overline: { ...theme.typography.overline, color: theme.colors.textMuted },
     titulo: { ...theme.typography.heading, fontSize: 22, color: theme.colors.textPrimary, marginTop: 2 },
     subtitulo: {
@@ -199,16 +230,11 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       flexDirection: 'row',
       alignItems: 'stretch',
       borderRadius: theme.radius.lg,
-      backgroundColor: theme.colors.surfaceElevated,
+      backgroundColor: theme.colors.surface,
       borderWidth: 1,
       borderColor: theme.colors.border,
       overflow: 'hidden',
       marginBottom: theme.spacing.sm + 2,
-      shadowColor: theme.shadow.color,
-      shadowOpacity: theme.shadow.opacity,
-      shadowRadius: theme.shadow.radius,
-      shadowOffset: { width: 0, height: theme.shadow.offsetY },
-      elevation: theme.shadow.opacity > 0 ? 2 : 0,
     },
     faixa: { width: 3 },
     cardSemTag: {

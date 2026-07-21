@@ -1,5 +1,5 @@
-import React from 'react';
-import { Modal, View, Text, Pressable, StyleSheet } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Modal, View, Text, Pressable, StyleSheet, TextInput } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { TAG_PALETTE_LIGHT, TAG_PALETTE_DARK } from '../theme/theme';
@@ -9,26 +9,83 @@ type Props = {
   tag: string;
   corAtual: number;
   onSelecionar: (corIndex: number) => void;
+  // MUDANÇA (9.2): novoNome já vem "trimado" e sem estar vazio — quem
+  // chama (TagsPanelContent) decide o que fazer com mesclagem (aqui o
+  // picker só avisa que o nome mudou, a lógica de mesclar/renomear vive
+  // em database.ts).
+  onRenomear: (novoNome: string) => void;
+  // Só sinaliza a intenção — a confirmação destrutiva (ConfirmDialog) e a
+  // chamada real de apagar vivem em TagsPanelContent, não aqui, pra não
+  // empilhar modal-dentro-de-modal-de-confirmação neste componente.
+  onSolicitarApagar: () => void;
   onFechar: () => void;
 };
 
-// Modal simples com as bolinhas da paleta do tema atual — toque pra
-// escolher, toque fora ou em "Fechar" pra cancelar. Chamado a partir de
-// um toque simples no card da tag em TagsScreen.
-export default function TagColorPicker({ visivel, tag, corAtual, onSelecionar, onFechar }: Props) {
+// Modal com as bolinhas da paleta do tema atual — toque pra escolher, toque
+// fora ou em "Fechar" pra cancelar. Também permite renomear (e, ao renomear
+// pra um nome já existente, mesclar automaticamente) ou apagar a tag por
+// completo. Chamado a partir de um toque simples no card da tag em
+// TagsPanelContent.
+export default function TagColorPicker({
+  visivel,
+  tag,
+  corAtual,
+  onSelecionar,
+  onRenomear,
+  onSolicitarApagar,
+  onFechar,
+}: Props) {
   const theme = useTheme();
-  const styles = criarStyles(theme);
+  const styles = useMemo(() => criarStyles(theme), [theme]);
   // Paleta muda com o tema (claro/escuro) pra manter contraste — o índice
   // gravado no banco é o mesmo, só a cor exibida em cada posição muda.
   const paleta = theme.mode === 'dark' ? TAG_PALETTE_DARK : TAG_PALETTE_LIGHT;
+
+  // Estado local do campo de nome — reseta pro nome atual sempre que o
+  // modal abre pra uma tag diferente (ou reabre pra mesma), pra nunca
+  // mostrar um rascunho de edição de uma abertura anterior.
+  const [nome, setNome] = useState(tag);
+  useEffect(() => {
+    if (visivel) setNome(tag);
+  }, [visivel, tag]);
+
+  const nomeMudou = nome.trim().length > 0 && nome.trim() !== tag;
+
+  function handleSalvarNome() {
+    if (!nomeMudou) return;
+    onRenomear(nome.trim());
+  }
 
   return (
     <Modal visible={visivel} transparent animationType="fade" onRequestClose={onFechar}>
       <Pressable style={styles.backdrop} onPress={onFechar}>
         <Pressable style={styles.cartao} onPress={(e) => e.stopPropagation()}>
           <View style={styles.puxador} />
+          <Text style={styles.overline}>RENOMEAR TAG</Text>
+
+          <View style={styles.linhaNome}>
+            <TextInput
+              style={styles.inputNome}
+              value={nome}
+              onChangeText={setNome}
+              placeholder={tag}
+              placeholderTextColor={theme.colors.textMuted}
+              autoCapitalize="none"
+              returnKeyType="done"
+              onSubmitEditing={handleSalvarNome}
+            />
+            {nomeMudou && (
+              <Pressable
+                style={({ pressed }) => [styles.botaoSalvarNome, { opacity: pressed ? 0.8 : 1 }]}
+                onPress={handleSalvarNome}
+                hitSlop={8}
+              >
+                <Feather name="check" size={16} color={theme.colors.accentText} />
+              </Pressable>
+            )}
+          </View>
+
           <Text style={styles.overline}>COR DA TAG</Text>
-          <Text style={styles.titulo}>{tag}</Text>
 
           <View style={styles.grade}>
             {paleta.map((cor, index) => {
@@ -52,10 +109,11 @@ export default function TagColorPicker({ visivel, tag, corAtual, onSelecionar, o
           </View>
 
           <Pressable
-            style={({ pressed }) => [styles.botaoFechar, { opacity: pressed ? 0.7 : 1 }]}
-            onPress={onFechar}
+            style={({ pressed }) => [styles.botaoApagar, { opacity: pressed ? 0.7 : 1 }]}
+            onPress={onSolicitarApagar}
           >
-            <Text style={styles.botaoFecharTexto}>Fechar</Text>
+            <Feather name="trash-2" size={14} color={theme.colors.urgent} />
+            <Text style={styles.botaoApagarTexto}>Apagar tag</Text>
           </Pressable>
         </Pressable>
       </Pressable>
@@ -98,15 +156,33 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       color: theme.colors.textMuted,
       textAlign: 'center',
     },
-    titulo: {
-      ...theme.typography.heading,
-      fontSize: 20,
-      color: theme.colors.textPrimary,
-      textAlign: 'center',
+    linhaNome: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.sm,
       marginTop: 4,
       marginBottom: theme.spacing.lg,
     },
-    grade: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: theme.spacing.md },
+    inputNome: {
+      flex: 1,
+      ...theme.typography.bodyMedium,
+      color: theme.colors.textPrimary,
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: theme.radius.md,
+      paddingHorizontal: theme.spacing.md,
+      paddingVertical: theme.spacing.sm,
+    },
+    botaoSalvarNome: {
+      width: 38,
+      height: 38,
+      borderRadius: theme.radius.pill,
+      backgroundColor: theme.colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    grade: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: theme.spacing.md, marginTop: theme.spacing.sm },
     bolinhaWrapper: {
       padding: 3,
       borderRadius: theme.radius.pill,
@@ -123,14 +199,14 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    botaoFechar: {
+    botaoApagar: {
       marginTop: theme.spacing.lg,
+      flexDirection: 'row',
       alignItems: 'center',
-      padding: theme.spacing.sm + 4,
-      borderRadius: theme.radius.md,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
+      justifyContent: 'center',
+      gap: 6,
+      padding: theme.spacing.xs + 2,
     },
-    botaoFecharTexto: { ...theme.typography.bodyMedium, color: theme.colors.textPrimary },
+    botaoApagarTexto: { ...theme.typography.caption, color: theme.colors.urgent },
   });
 }
