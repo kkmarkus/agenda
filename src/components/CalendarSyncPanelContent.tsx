@@ -1,39 +1,50 @@
-import React, { useCallback, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Feather } from '@expo/vector-icons';
 import {
   pedirPermissao,
   listarCalendariosDisponiveisParaSync,
+  buscarNativeEventIdsDoCalendario,
   CalendarioDisponivel,
 } from '../services/calendarService';
-import { obterPreferenciasSincronizacao, definirSincronizacaoDoCalendario } from '../services/database';
-import type { RootStackParamList } from '../navigation/AppNavigator';
+import {
+  obterPreferenciasSincronizacao,
+  definirSincronizacaoDoCalendario,
+  listarRegistros,
+  apagarRegistro,
+  RegistroEvento,
+} from '../services/database';
 import { useTheme } from '../theme/ThemeContext';
-import SkeletonBlock from '../components/SkeletonBlock';
+import SkeletonBlock from './SkeletonBlock';
+import ConfirmDialog from './ConfirmDialog';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Sincronizar'>;
-
-// Tela de configuração: escolher quais calendários nativos (fora o "Meus
-// Eventos (App)") ela quer importar automaticamente pro dashboard. A
-// sincronização em si roda sozinha, sempre que o Dashboard ganha foco —
-// aqui é só o interruptor de "quais calendários entram nessa".
-export default function CalendarSyncScreen({ navigation }: Props) {
+// MUDANÇA (item 7): mesmo conteúdo que antes vivia em CalendarSyncScreen.tsx,
+// extraído pra um componente sem navegação própria — ver comentário
+// equivalente em TagsPanelContent.tsx sobre a troca de useFocusEffect por
+// um useEffect de montagem simples.
+//
+// CORREÇÃO (remoção do botão de voltar): ver comentário equivalente em
+// TagsPanelContent.tsx — sair depende só do backdrop ou do voltar nativo.
+export default function CalendarSyncPanelContent() {
   const theme = useTheme();
-  const styles = criarStyles(theme);
+  const styles = useMemo(() => criarStyles(theme), [theme]);
 
   const [calendarios, setCalendarios] = useState<CalendarioDisponivel[]>([]);
   const [ativos, setAtivos] = useState<Record<string, boolean>>({});
   const [carregando, setCarregando] = useState(true);
   const [semPermissao, setSemPermissao] = useState(false);
+  // MUDANÇA (9.4): quando ela desativa um calendário que já estava
+  // sincronizado, guardamos aqui os registros locais que vieram dele (sem
+  // tag, com native_event_id ainda presente nesse calendário) — só até ela
+  // decidir, no ConfirmDialog, se quer removê-los do app ou mantê-los.
+  const [calendarioParaLimpar, setCalendarioParaLimpar] = useState<{
+    titulo: string;
+    registros: RegistroEvento[];
+  } | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      carregar();
-    }, [])
-  );
+  useEffect(() => {
+    carregar();
+  }, []);
 
   async function carregar() {
     setCarregando(true);
@@ -54,21 +65,47 @@ export default function CalendarSyncScreen({ navigation }: Props) {
     setCarregando(false);
   }
 
-  function alternar(calendarId: string) {
-    const novoValor = !ativos[calendarId];
+  /**
+   * MUDANÇA (9.4): ao DESATIVAR (não ao ativar) um calendário, checa se
+   * existem eventos locais importados dele — sem tag (sinal de que vieram
+   * da sincronização automática, não de um evento que ela classificou à
+   * mão) e cujo id nativo ainda pertence a esse calendário — e, se houver,
+   * pergunta se ela quer removê-los do Dashboard. A sincronização em si só
+   * ADICIONA eventos novos (ver DashboardScreen); sem essa oferta, os já
+   * importados ficariam pra sempre mesmo depois de desativado o calendário.
+   * Reaproveita `listarRegistros` + `apagarRegistro` — não mexe na agenda
+   * nativa (o evento é dela, não do app; só o registro local é removido).
+   */
+  async function alternar(calendarId: string, titulo: string) {
+    const eraAtivo = !!ativos[calendarId];
+    const novoValor = !eraAtivo;
     definirSincronizacaoDoCalendario(calendarId, novoValor);
     setAtivos((atual) => ({ ...atual, [calendarId]: novoValor }));
+
+    if (!eraAtivo || novoValor) return; // só interessa a transição ativo -> inativo
+
+    try {
+      const idsDoCalendario = await buscarNativeEventIdsDoCalendario(calendarId);
+      const registrosImportados = listarRegistros().filter(
+        (r) => r.tags.length === 0 && idsDoCalendario.has(r.nativeEventId)
+      );
+      if (registrosImportados.length > 0) {
+        setCalendarioParaLimpar({ titulo, registros: registrosImportados });
+      }
+    } catch {
+      // Se a busca falhar (ex: permissão revogada nesse meio-tempo), a
+      // desativação da sincronização já aconteceu normalmente acima — só
+      // não oferecemos a limpeza em lote dessa vez.
+    }
+  }
+
+  function confirmarLimpezaImportados() {
+    calendarioParaLimpar?.registros.forEach((r) => apagarRegistro(r.id));
+    setCalendarioParaLimpar(null);
   }
 
   const cabecalho = (
     <View style={styles.headerTopRow}>
-      <Pressable
-        style={({ pressed }) => [styles.voltar, { opacity: pressed ? 0.6 : 1 }]}
-        onPress={() => navigation.goBack()}
-        hitSlop={10}
-      >
-        <Feather name="arrow-left" size={18} color={theme.colors.textSecondary} />
-      </Pressable>
       <View>
         <Text style={styles.overline}>CONFIGURAÇÃO</Text>
         <Text style={styles.titulo}>Sincronizar calendários</Text>
@@ -77,7 +114,7 @@ export default function CalendarSyncScreen({ navigation }: Props) {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <View style={styles.container}>
       {cabecalho}
       <Text style={styles.subtitulo}>
         Eventos futuros dos calendários ativados aqui aparecem sozinhos no seu
@@ -104,9 +141,7 @@ export default function CalendarSyncScreen({ navigation }: Props) {
           <View style={styles.vazioIconeCirculo}>
             <Feather name="calendar" size={22} color={theme.colors.textMuted} />
           </View>
-          <Text style={styles.vazio}>
-            Nenhum outro calendário editável encontrado no aparelho.
-          </Text>
+          <Text style={styles.vazio}>Nenhum outro calendário editável encontrado no aparelho.</Text>
         </View>
       ) : (
         <FlatList
@@ -118,7 +153,7 @@ export default function CalendarSyncScreen({ navigation }: Props) {
             return (
               <Pressable
                 style={({ pressed }) => [styles.card, { opacity: pressed ? 0.8 : 1 }]}
-                onPress={() => alternar(item.id)}
+                onPress={() => alternar(item.id, item.titulo)}
               >
                 <View style={[styles.faixa, { backgroundColor: item.cor }]} />
                 <View style={styles.cardConteudo}>
@@ -137,24 +172,32 @@ export default function CalendarSyncScreen({ navigation }: Props) {
           }}
         />
       )}
-    </SafeAreaView>
+
+      <ConfirmDialog
+        visivel={calendarioParaLimpar !== null}
+        titulo="Remover eventos importados"
+        mensagem={
+          calendarioParaLimpar
+            ? `Você desativou "${calendarioParaLimpar.titulo}". Remover do app os ${calendarioParaLimpar.registros.length} ${
+                calendarioParaLimpar.registros.length === 1 ? 'evento já importado' : 'eventos já importados'
+              } dele? Isso não apaga nada do calendário original — só some do seu Dashboard.`
+            : ''
+        }
+        icone="trash-2"
+        destrutivo
+        textoCancelar="Manter no Dashboard"
+        textoConfirmar="Remover"
+        onConfirmar={confirmarLimpezaImportados}
+        onFechar={() => setCalendarioParaLimpar(null)}
+      />
+    </View>
   );
 }
 
 function criarStyles(theme: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
-    container: { flex: 1, padding: theme.spacing.lg, backgroundColor: theme.colors.background },
+    container: { flex: 1, padding: theme.spacing.lg, paddingTop: theme.spacing.xl },
     headerTopRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, marginBottom: theme.spacing.xs },
-    voltar: {
-      width: 34,
-      height: 34,
-      borderRadius: theme.radius.pill,
-      backgroundColor: theme.colors.surface,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
     overline: { ...theme.typography.overline, color: theme.colors.textMuted },
     titulo: { ...theme.typography.heading, fontSize: 20, color: theme.colors.textPrimary, marginTop: 2 },
     subtitulo: {
@@ -185,7 +228,7 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       flexDirection: 'row',
       alignItems: 'stretch',
       borderRadius: theme.radius.lg,
-      backgroundColor: theme.colors.surfaceElevated,
+      backgroundColor: theme.colors.surface,
       borderWidth: 1,
       borderColor: theme.colors.border,
       overflow: 'hidden',
