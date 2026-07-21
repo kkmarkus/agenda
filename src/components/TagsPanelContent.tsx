@@ -10,7 +10,7 @@ import {
   SEM_TAG_LABEL,
 } from '../services/database';
 import { useTheme } from '../theme/ThemeContext';
-import { corDaTag, TAG_WASH_ALPHA } from '../theme/theme';
+import { corDaTag, corDaTagAcentuada, TAG_WASH_ALPHA } from '../theme/theme';
 import TagColorPicker from './TagColorPicker';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -136,16 +136,20 @@ export default function TagsPanelContent() {
           showsVerticalScrollIndicator={false}
           renderItem={({ item, index }) => {
             const cor = corDaTag(corIndexDe(item.tag, index), theme.mode);
+            // CORREÇÃO (item D — opção 2): a faixa lateral e o ícone (glifo)
+            // usam a versão mais saturada — o fundo lavado do círculo do
+            // ícone continua vindo de `cor` (paleta original).
+            const corAcentuada = corDaTagAcentuada(corIndexDe(item.tag, index), theme.mode);
             return (
               <Pressable
                 style={({ pressed }) => [styles.card, { opacity: pressed ? 0.8 : 1 }]}
                 onPress={() => setTagEmEdicao(item.tag)}
               >
-                <View style={[styles.faixa, { backgroundColor: cor.base }]} />
+                <View style={[styles.faixa, { backgroundColor: corAcentuada.base }]} />
                 <View style={styles.cardConteudo}>
                   <View style={styles.cardEsquerda}>
                     <View style={[styles.iconeTag, { backgroundColor: cor.base + TAG_WASH_ALPHA }]}>
-                      <Feather name="tag" size={13} color={cor.base} />
+                      <Feather name="tag" size={13} color={corAcentuada.base} />
                     </View>
                     <Text style={styles.cardTitulo}>{item.tag}</Text>
                   </View>

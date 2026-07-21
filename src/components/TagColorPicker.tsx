@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, View, Text, Pressable, StyleSheet, TextInput } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { TAG_PALETTE_LIGHT, TAG_PALETTE_DARK } from '../theme/theme';
+import { TAG_PALETTE_LIGHT, TAG_PALETTE_DARK, TAG_PALETTE_LIGHT_ACENTUADA, TAG_PALETTE_DARK_ACENTUADA } from '../theme/theme';
 
 type Props = {
   visivel: boolean;
@@ -40,6 +40,11 @@ export default function TagColorPicker({
   // Paleta muda com o tema (claro/escuro) pra manter contraste — o índice
   // gravado no banco é o mesmo, só a cor exibida em cada posição muda.
   const paleta = theme.mode === 'dark' ? TAG_PALETTE_DARK : TAG_PALETTE_LIGHT;
+  // CORREÇÃO (item D — opção 2): as bolinhas do seletor mostram a versão
+  // mais saturada, pra bater com o que ela vai ver na bolinha do Dashboard
+  // e na faixa do painel de Tags — mesmo índice, só a cor de exibição
+  // muda (o índice gravado no banco continua sendo o da paleta original).
+  const paletaAcentuada = theme.mode === 'dark' ? TAG_PALETTE_DARK_ACENTUADA : TAG_PALETTE_LIGHT_ACENTUADA;
 
   // Estado local do campo de nome — reseta pro nome atual sempre que o
   // modal abre pra uma tag diferente (ou reabre pra mesma), pra nunca
@@ -90,6 +95,7 @@ export default function TagColorPicker({
           <View style={styles.grade}>
             {paleta.map((cor, index) => {
               const selecionada = index === corAtual;
+              const corVivo = paletaAcentuada[index];
               return (
                 <Pressable
                   key={index}
@@ -100,7 +106,7 @@ export default function TagColorPicker({
                   ]}
                   onPress={() => onSelecionar(index)}
                 >
-                  <View style={[styles.bolinha, { backgroundColor: cor.base }]}>
+                  <View style={[styles.bolinha, { backgroundColor: corVivo.base }]}>
                     {selecionada && <Feather name="check" size={16} color={cor.text} />}
                   </View>
                 </Pressable>

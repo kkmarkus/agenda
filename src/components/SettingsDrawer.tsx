@@ -560,8 +560,17 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     },
     segmentoItemAtivo: { backgroundColor: theme.colors.accent },
     segmentoTexto: { ...theme.typography.caption, color: theme.colors.textSecondary },
-    gradeCores: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.sm + 2 },
+    // CORREÇÃO (bug 5): antes só tinha `gap`, sem `justifyContent` nem
+    // número de colunas fixo — o flexWrap ia encaixando quantas bolinhas
+    // coubessem na largura disponível (5 numa tela, podendo virar 4 ou 6
+    // em outra), sobrando uma linha final incompleta e "torta". Fixando 4
+    // colunas de verdade (bolinhaWrapper com width fixa + space-between),
+    // as 8 cores sempre desenham 2 linhas parelhas de 4, em qualquer
+    // tamanho de tela.
+    gradeCores: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: theme.spacing.sm + 2 },
     bolinhaWrapper: {
+      width: '22%',
+      alignItems: 'center',
       padding: 3,
       borderRadius: theme.radius.pill,
       borderWidth: 2,
