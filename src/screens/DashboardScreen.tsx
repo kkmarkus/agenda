@@ -1,9 +1,9 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, FlatList, Pressable, ScrollView, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import Swipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { buscarEventoDaAgenda, apagarEventoDaAgenda, buscarEventosFuturosDeCalendarios } from '../services/calendarService';
 import {
@@ -20,7 +20,7 @@ import {
 import { EventoApp } from '../types/event';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme/ThemeContext';
-import { corDaTag, TAG_WASH_ALPHA } from '../theme/theme';
+import { corDaTag, corDaTagAcentuada, TAG_WASH_ALPHA } from '../theme/theme';
 import SkeletonBlock from '../components/SkeletonBlock';
 import ConfirmDialog from '../components/ConfirmDialog';
 import SettingsDrawer from '../components/SettingsDrawer';
@@ -44,6 +44,178 @@ const MESES_COMPLETOS = [
   'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
 ];
 const MESES_ABREV = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+// CORREÇÃO (perf 1): extraído de dentro de carregarEventos pra poder ser
+// reaproveitado nas atualizações otimistas (fixar/desafixar, apagar,
+// limpar passados) — mesmo critério de sempre: fixados primeiro
+// (ordenados entre si por data), depois o resto por proximidade. `sort` é
+// estável no engine JS usado pelo React Native (V8/Hermes), então basta
+// comparar o fixado — quem empata mantém a ordem relativa da comparação
+// por data que já rodou antes.
+function ordenarEventos(lista: EventoApp[]): EventoApp[] {
+  const copia = [...lista];
+  copia.sort((a, b) => a.data.getTime() - b.data.getTime());
+  copia.sort((a, b) => Number(b.fixado) - Number(a.fixado));
+  return copia;
+}
+
+// CORREÇÃO (perf 2): antes esse card inteiro era uma função inline dentro
+// do `renderItem` do FlatList — recriada a cada render do Dashboard,
+// inclusive a cada tecla digitada na busca. Extraído pra um componente
+// próprio e envolvido em `React.memo`, ele só rerenderiza quando as props
+// de um evento específico mudam de verdade (não quando outro evento da
+// lista muda, nem quando o texto de busca muda mas esse item continua
+// igual).
+type EventoCardProps = {
+  item: EventoApp;
+  urgente: boolean;
+  horasRestantes: number;
+  theme: ReturnType<typeof useTheme>;
+  styles: ReturnType<typeof criarStyles>;
+  coresPorTag: Record<string, number>;
+  registrarSwipeableRef: (id: number, ref: any) => void;
+  onSwipeableWillOpen: (id: number) => void;
+  onEditar: (evento: EventoApp) => void;
+  onAlternarFixado: (evento: EventoApp) => void;
+  onApagar: (evento: EventoApp) => void;
+};
+
+const EventoCard = React.memo(function EventoCard({
+  item,
+  urgente,
+  horasRestantes,
+  theme,
+  styles,
+  coresPorTag,
+  registrarSwipeableRef,
+  onSwipeableWillOpen,
+  onEditar,
+  onAlternarFixado,
+  onApagar,
+}: EventoCardProps) {
+  // MUDANÇA (item 4): tags exibidas nas pills e no traço lateral, travadas
+  // nas 3 primeiras (na ordem em que foram adicionadas — ver
+  // definirTagsDoEvento em database.ts). Com 4+ tags, as demais continuam
+  // aparecendo só nas pills de texto (ver "+N" abaixo), sem ganhar
+  // segmento próprio no traço.
+  const tagsParaFaixa = item.tags.slice(0, 3);
+  function corDaTagNome(nome: string) {
+    return corDaTag(coresPorTag[nome.trim().toLowerCase()] ?? 0, theme.mode);
+  }
+  // CORREÇÃO (item D — opção 2): só a bolinha de 6px do pill usa a versão
+  // mais saturada — o fundo lavado da pill e o texto continuam vindo de
+  // corDaTagNome (paleta original).
+  function corAcentuadaDaTagNome(nome: string) {
+    return corDaTagAcentuada(coresPorTag[nome.trim().toLowerCase()] ?? 0, theme.mode);
+  }
+
+  // Evento urgente sobrepõe a cor de urgência no lugar das cores de tag
+  // (regra que já existia antes do item 4, sem mudança) — um único
+  // segmento sólido, não um por tag, já que a urgência é uma propriedade
+  // do evento, não de cada tag individualmente.
+  const segmentosFaixa: string[] = urgente
+    ? [theme.colors.urgent]
+    : tagsParaFaixa.length > 0
+    ? tagsParaFaixa.map((t) => corDaTagNome(t).base)
+    : [theme.colors.textMuted];
+
+  return (
+    <Swipeable
+      ref={(ref) => registrarSwipeableRef(item.id, ref)}
+      overshootRight={false}
+      rightThreshold={40}
+      friction={2}
+      onSwipeableWillOpen={() => onSwipeableWillOpen(item.id)}
+      renderRightActions={() => (
+        <View style={styles.acoesSwipeRow}>
+          <Pressable style={styles.acaoFixar} onPress={() => onAlternarFixado(item)}>
+            {/* CORREÇÃO (bug 4): "map-pin" do Feather é um pino de
+                localização (gota de mapa), sem relação visual com "fixar
+                no topo" — MaterialCommunityIcons tem um alfinete/thumbtack
+                de verdade ("pin"). */}
+            <MaterialCommunityIcons
+              name="pin"
+              size={19}
+              color={item.fixado ? theme.colors.accent : theme.colors.textMuted}
+            />
+          </Pressable>
+          <Pressable style={styles.acaoApagar} onPress={() => onApagar(item)}>
+            <Feather name="trash-2" size={19} color={theme.colors.urgent} />
+          </Pressable>
+        </View>
+      )}
+    >
+      <Pressable
+        style={({ pressed }) => [styles.card, { opacity: pressed ? 0.85 : 1 }]}
+        onPress={() => onEditar(item)}
+      >
+        <View style={styles.faixa}>
+          {segmentosFaixa.map((corSegmento, indice) => (
+            <View key={indice} style={[styles.faixaSegmento, { backgroundColor: corSegmento }]} />
+          ))}
+        </View>
+        <View style={styles.cardConteudo}>
+          <View style={{ flex: 1 }}>
+            <View style={styles.cardTituloRow}>
+              {item.fixado && <MaterialCommunityIcons name="pin" size={12} color={theme.colors.accent} />}
+              {urgente && <Feather name="bell" size={12} color={theme.colors.urgent} />}
+              <Text style={styles.cardTitulo} numberOfLines={1}>{item.titulo}</Text>
+            </View>
+            {/* CORREÇÃO (bug 6): antes cardMetaRow (data) e cardTagsRow
+                (pills) eram duas Views separadas, uma sempre embaixo da
+                outra — mesmo quando cabia tudo numa linha só (ex: 1-2 tags
+                curtas). Um único container com flexWrap deixa a data e as
+                pills preencherem a mesma linha na ordem em que aparecem,
+                só descendo pra uma segunda linha quando não couber mais —
+                sem precisar de nenhuma lógica baseada em quantas tags o
+                evento tem. */}
+            <View style={styles.cardMetaTagsRow}>
+              <Text style={[styles.cardData, urgente && styles.cardDataUrgente]}>
+                {formatarDataLegivel(item.data)}
+              </Text>
+              {item.tags.length === 0 ? (
+                <View style={styles.cardTagPill}>
+                  <View style={[styles.cardTagBolinha, { backgroundColor: theme.colors.textMuted }]} />
+                  <Text style={styles.cardTagTexto} numberOfLines={1}>{SEM_TAG_LABEL}</Text>
+                </View>
+              ) : (
+                <>
+                  {item.tags.slice(0, 3).map((nomeTag) => {
+                    const corTag = corDaTagNome(nomeTag);
+                    return (
+                      <View
+                        key={nomeTag}
+                        style={[styles.cardTagPill, { backgroundColor: corTag.base + TAG_WASH_ALPHA }]}
+                      >
+                        <View
+                          style={[
+                            styles.cardTagBolinha,
+                            { backgroundColor: corAcentuadaDaTagNome(nomeTag).base },
+                          ]}
+                        />
+                        <Text style={[styles.cardTagTexto, { color: corTag.base }]} numberOfLines={1}>
+                          {nomeTag}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                  {item.tags.length > 3 && (
+                    <View style={styles.cardTagPill}>
+                      <Text style={styles.cardTagTexto}>+{item.tags.length - 3}</Text>
+                    </View>
+                  )}
+                </>
+              )}
+            </View>
+          </View>
+          <Text style={[styles.cardDias, urgente && styles.cardDiasUrgente]}>
+            {formatarDiasRestantes(horasRestantes)}
+          </Text>
+        </View>
+      </Pressable>
+    </Swipeable>
+  );
+});
 
 export default function DashboardScreen({ navigation }: Props) {
   const theme = useTheme();
@@ -69,17 +241,38 @@ export default function DashboardScreen({ navigation }: Props) {
   // combinam por E lógico: uma tag ativa + um texto de busca mostram só o
   // que casa com AMBOS.
   const [busca, setBusca] = useState('');
+  // CORREÇÃO (perf 4): `busca` (acima) atualiza a cada tecla, pro campo em
+  // si responder na hora — sem isso o texto digitado pareceria com
+  // atraso. `buscaDebounced` só acompanha 200ms depois que ela para de
+  // digitar, e é essa versão que alimenta o filtro de verdade (mais
+  // abaixo), evitando recalcular a lista inteira a cada caractere.
+  const [buscaDebounced, setBuscaDebounced] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setBuscaDebounced(busca), 200);
+    return () => clearTimeout(timer);
+  }, [busca]);
 
   // Cada linha da lista tem seu próprio Swipeable; guardamos as refs pra
   // poder fechar as outras quando uma nova é aberta (senão várias linhas
   // podem ficar "abertas" ao mesmo tempo, o que fica estranho).
   const swipeableRefs = useRef<Record<number, any>>({});
 
+  // CORREÇÃO (perf 2): funções estáveis (useCallback com deps vazias) —
+  // passadas como prop pro EventoCard memoizado, uma nova referência a
+  // cada render invalidaria o React.memo dele à toa.
+  const registrarSwipeableRef = useCallback((id: number, ref: any) => {
+    swipeableRefs.current[id] = ref;
+  }, []);
+
   function fecharOutrosSwipes(idAtual: number) {
     Object.entries(swipeableRefs.current).forEach(([id, ref]) => {
       if (Number(id) !== idAtual && ref) ref.close();
     });
   }
+  // CORREÇÃO (perf 2): versão estável de fecharOutrosSwipes, pra passar
+  // como prop pro EventoCard memoizado sem invalidar o React.memo a cada
+  // render.
+  const onSwipeableWillOpen = useCallback((idAtual: number) => fecharOutrosSwipes(idAtual), []);
 
   // useFocusEffect (não useEffect) porque ela pode voltar pra essa tela
   // depois de salvar um evento novo — precisa recarregar toda vez que a tela ganha foco.
@@ -167,13 +360,10 @@ export default function DashboardScreen({ navigation }: Props) {
     registrosOrfaos.forEach((id) => apagarRegistro(id));
 
     // MUDANÇA (item 5): fixados sempre primeiro (ordenados entre si por
-    // data, igual antes), depois o resto na ordem de sempre (proximidade).
-    // `sort` é estável no engine JS usado pelo React Native (V8/Hermes),
-    // então basta comparar o fixado — quem empata em fixado mantém a ordem
-    // relativa da comparação por data que já rodou antes.
-    resultado.sort((a, b) => a.data.getTime() - b.data.getTime());
-    resultado.sort((a, b) => Number(b.fixado) - Number(a.fixado));
-    setEventos(resultado);
+    // data, igual antes), depois o resto na ordem de sempre (proximidade)
+    // — ver ordenarEventos, acima, reaproveitada aqui e nas atualizações
+    // otimistas (perf 1).
+    setEventos(ordenarEventos(resultado));
     setTagsDisponiveis(listarTagsUnicas());
     setCoresPorTag(listarCoresDeTags());
     setCarregando(false);
@@ -182,49 +372,70 @@ export default function DashboardScreen({ navigation }: Props) {
   // MUDANÇA (item 2): navega pra edição de fato — extraído do antigo
   // handleEditar pra poder ser chamado tanto direto (evento comum) quanto
   // depois de ela escolher o escopo (evento recorrente).
-  function navegarParaEdicao(evento: EventoApp, ocorrencia?: { instanceStartDate: Date; futureEvents: boolean }) {
-    navigation.navigate('Confirmar', {
-      nativeEventId: evento.nativeEventId,
-      rascunho: {
-        titulo: evento.titulo,
-        data: evento.data,
-        descricao: evento.descricao,
-        tags: evento.tags,
-        recorrencia: evento.recorrencia,
-      },
-      ocorrencia,
-    });
-  }
+  // CORREÇÃO (perf 2): useCallback — handleEditar (abaixo, passado como
+  // prop pro EventoCard memoizado) depende dela.
+  const navegarParaEdicao = useCallback(
+    (evento: EventoApp, ocorrencia?: { instanceStartDate: Date; futureEvents: boolean }) => {
+      navigation.navigate('Confirmar', {
+        nativeEventId: evento.nativeEventId,
+        rascunho: {
+          titulo: evento.titulo,
+          data: evento.data,
+          descricao: evento.descricao,
+          tags: evento.tags,
+          recorrencia: evento.recorrencia,
+        },
+        ocorrencia,
+      });
+    },
+    [navigation]
+  );
 
   // Evento recorrente aguardando ela escolher "Somente este" ou "Este e os
   // futuros" antes de abrir a tela de edição.
   const [eventoParaEscolherEscopoEdicao, setEventoParaEscolherEscopoEdicao] = useState<EventoApp | null>(null);
 
-  function handleEditar(evento: EventoApp) {
-    if (evento.recorrente) {
-      setEventoParaEscolherEscopoEdicao(evento);
-      return;
-    }
-    navegarParaEdicao(evento);
-  }
+  // CORREÇÃO (perf 2): useCallback — passada como prop pro EventoCard
+  // memoizado, uma nova referência a cada render invalidaria o
+  // React.memo dele à toa.
+  const handleEditar = useCallback(
+    (evento: EventoApp) => {
+      if (evento.recorrente) {
+        setEventoParaEscolherEscopoEdicao(evento);
+        return;
+      }
+      navegarParaEdicao(evento);
+    },
+    [navegarParaEdicao]
+  );
 
   // Estado do evento aguardando confirmação de exclusão — substitui o
   // Alert.alert nativo (fora do tema, sempre branco/Material) pelo
   // ConfirmDialog, que segue a paleta do app.
   const [eventoParaApagar, setEventoParaApagar] = useState<EventoApp | null>(null);
 
-  function handleApagar(evento: EventoApp) {
+  // CORREÇÃO (perf 2): useCallback, mesmo motivo acima.
+  const handleApagar = useCallback((evento: EventoApp) => {
     swipeableRefs.current[evento.id]?.close();
     setEventoParaApagar(evento);
-  }
+  }, []);
 
   // MUDANÇA (item 5): fixar/desafixar não precisa de confirmação (ação
-  // reversível e barata, diferente de apagar) — alterna e recarrega direto.
-  function handleAlternarFixado(evento: EventoApp) {
+  // reversível e barata, diferente de apagar) — alterna direto.
+  // CORREÇÃO (bug 2 + perf 1): antes chamava carregarEventos() depois de
+  // alternar — isso disparava buscarEventoDaAgenda (chamada nativa) de
+  // novo pra TODOS os eventos só pra refletir uma mudança de um campo já
+  // conhecido localmente (fixado). Como não tem nenhum dado vindo de fora
+  // do app envolvido aqui, dá pra atualizar o estado local direto e
+  // reordenar em memória.
+  // CORREÇÃO (perf 2): useCallback, mesmo motivo acima.
+  const handleAlternarFixado = useCallback((evento: EventoApp) => {
     swipeableRefs.current[evento.id]?.close();
     alternarFixado(evento.id);
-    carregarEventos();
-  }
+    setEventos((atual) =>
+      ordenarEventos(atual.map((e) => (e.id === evento.id ? { ...e, fixado: !e.fixado } : e)))
+    );
+  }, []);
 
   async function confirmarApagar(futureEvents?: boolean) {
     if (!eventoParaApagar) return;
@@ -248,9 +459,21 @@ export default function DashboardScreen({ navigation }: Props) {
     await apagarEventoDaAgenda(eventoParaApagar.nativeEventId, opcoesOcorrencia);
     if (!opcoesOcorrencia) {
       apagarRegistro(eventoParaApagar.id);
+      // CORREÇÃO (bug 2 + perf 1): registro realmente sumiu (não é uma
+      // série que pode continuar existindo) — remove do estado local
+      // direto, sem recarregar tudo de novo.
+      const idApagado = eventoParaApagar.id;
+      setEventos((atual) => atual.filter((e) => e.id !== idApagado));
+      setEventoParaApagar(null);
+    } else {
+      // Evento recorrente com escopo ("Somente este" / "Este e os
+      // futuros"): o registro local continua representando a série, mas a
+      // PRÓXIMA ocorrência exibida pode ter mudado — isso só a agenda
+      // nativa sabe, então aqui precisa mesmo recarregar pra buscar a
+      // data atualizada (não dá pra estimar isso otimisticamente).
+      setEventoParaApagar(null);
+      carregarEventos();
     }
-    setEventoParaApagar(null);
-    carregarEventos();
   }
 
   // MUDANÇA (item 6): estado do diálogo de limpeza em lote — separado de
@@ -262,19 +485,35 @@ export default function DashboardScreen({ navigation }: Props) {
    * tanto pela limpeza em lote (item 6) quanto, no fundo, pelo mesmo
    * caminho que `confirmarApagar` já percorre pra um evento só, reaproveitado
    * aqui em vez de duplicar o loop de apagar+desregistrar.
+   *
+   * CORREÇÃO (perf 3): antes era um `for...of` sequencial (um `await` por
+   * evento, esperando cada exclusão terminar antes de começar a próxima),
+   * mesmo padrão que já tinha sido corrigido no carregamento
+   * (`carregarEventos` usa `Promise.all` desde a mudança 9.3). Como cada
+   * exclusão é independente (não lê nada que outra escreveu — diferente
+   * de leitura+escrita misturadas, onde paralelizar poderia causar
+   * condição de corrida), dá pra paralelizar do mesmo jeito: o tempo total
+   * passa a ser o da exclusão mais lenta, não a soma de todas.
    */
   async function apagarListaDeEventos(lista: EventoApp[]) {
-    for (const evento of lista) {
-      await apagarEventoDaAgenda(evento.nativeEventId);
-      apagarRegistro(evento.id);
-    }
+    await Promise.all(
+      lista.map(async (evento) => {
+        await apagarEventoDaAgenda(evento.nativeEventId);
+        apagarRegistro(evento.id);
+      })
+    );
   }
 
   async function confirmarLimpezaPassados(incluirFixados: boolean) {
     const alvos = incluirFixados ? eventosPassados : eventosPassadosNaoFixados;
     await apagarListaDeEventos(alvos);
     setConfirmandoLimpezaPassados(false);
-    carregarEventos();
+    // CORREÇÃO (bug 2 + perf 1): mesmo raciocínio do apagar/fixar — todos
+    // os `alvos` já foram removidos (agenda nativa + registro local), não
+    // tem nenhum dado externo pra buscar de novo. Remove do estado local
+    // direto em vez de recarregar tudo.
+    const idsApagados = new Set(alvos.map((e) => e.id));
+    setEventos((atual) => atual.filter((e) => !idsApagados.has(e.id)));
   }
 
 
@@ -286,20 +525,32 @@ export default function DashboardScreen({ navigation }: Props) {
   // checar se a tag ativa está ENTRE as tags do evento (some), não se é a
   // única tag dele (comparação de igualdade direta, que só fazia sentido
   // quando cada evento tinha no máximo uma).
-  const eventosFiltradosPorTag =
-    tagAtiva === null
+  // CORREÇÃO (perf 2): antes rodava direto no corpo da função, recalculando
+  // (com uma nova referência de array) a cada render — inclusive a cada
+  // tecla digitada na busca. `useMemo` só recalcula quando `eventos` ou
+  // `tagAtiva` mudam de verdade.
+  const eventosFiltradosPorTag = useMemo(() => {
+    return tagAtiva === null
       ? eventos
       : tagAtiva === ''
       ? eventos.filter((e) => e.tags.length === 0)
       : eventos.filter((e) => e.tags.some((t) => t.toLowerCase() === tagAtiva.toLowerCase()));
+  }, [eventos, tagAtiva]);
 
   // MUDANÇA (9.5): aplicado por cima do filtro de tag, não no lugar dele —
   // buscar "reunião" com a aba "Trabalho" ativa mostra só reuniões
   // marcadas como Trabalho, não todas as reuniões do app inteiro.
-  const buscaNormalizada = busca.trim().toLowerCase();
-  const eventosFiltrados = buscaNormalizada
-    ? eventosFiltradosPorTag.filter((e) => e.titulo.toLowerCase().includes(buscaNormalizada))
-    : eventosFiltradosPorTag;
+  // CORREÇÃO (perf 2): mesmo raciocínio acima — só recalcula quando o
+  // resultado do filtro de tag ou o texto da busca mudam.
+  // CORREÇÃO (perf 4): usa buscaDebounced, não busca — o filtro (e o
+  // recálculo de eventosFiltrados que ele aciona) só roda 200ms depois da
+  // última tecla digitada.
+  const buscaNormalizada = buscaDebounced.trim().toLowerCase();
+  const eventosFiltrados = useMemo(() => {
+    return buscaNormalizada
+      ? eventosFiltradosPorTag.filter((e) => e.titulo.toLowerCase().includes(buscaNormalizada))
+      : eventosFiltradosPorTag;
+  }, [eventosFiltradosPorTag, buscaNormalizada]);
 
   const agora = new Date();
 
@@ -320,6 +571,35 @@ export default function DashboardScreen({ navigation }: Props) {
     const horas = (e.data.getTime() - Date.now()) / (1000 * 60 * 60);
     return horas >= 0 && horas <= LIMITE_URGENTE_HORAS;
   }).length;
+
+  // CORREÇÃO (perf 2): renderItem do FlatList como useCallback — antes era
+  // uma função inline no JSX, recriada a cada render (inclusive a cada
+  // tecla digitada na busca). Suas deps são só o que o EventoCard
+  // realmente usa (theme/styles/coresPorTag + as funções estáveis
+  // definidas acima), então só muda de referência quando algo que afeta a
+  // renderização de fato muda.
+  const renderItem = useCallback(
+    ({ item }: { item: EventoApp }) => {
+      const horasRestantes = (item.data.getTime() - Date.now()) / (1000 * 60 * 60);
+      const urgente = horasRestantes >= 0 && horasRestantes <= LIMITE_URGENTE_HORAS;
+      return (
+        <EventoCard
+          item={item}
+          urgente={urgente}
+          horasRestantes={horasRestantes}
+          theme={theme}
+          styles={styles}
+          coresPorTag={coresPorTag}
+          registrarSwipeableRef={registrarSwipeableRef}
+          onSwipeableWillOpen={onSwipeableWillOpen}
+          onEditar={handleEditar}
+          onAlternarFixado={handleAlternarFixado}
+          onApagar={handleApagar}
+        />
+      );
+    },
+    [theme, styles, coresPorTag, registrarSwipeableRef, onSwipeableWillOpen, handleEditar, handleAlternarFixado, handleApagar]
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -455,118 +735,7 @@ export default function DashboardScreen({ navigation }: Props) {
               </View>
             ) : null
           }
-          renderItem={({ item }) => {
-            const horasRestantes = (item.data.getTime() - Date.now()) / (1000 * 60 * 60);
-            const urgente = horasRestantes >= 0 && horasRestantes <= LIMITE_URGENTE_HORAS;
-
-            // MUDANÇA (item 4): tags exibidas nas pills e no traço lateral,
-            // travadas nas 3 primeiras (na ordem em que foram adicionadas —
-            // ver definirTagsDoEvento em database.ts). Com 4+ tags, as
-            // demais continuam aparecendo só nas pills de texto (ver
-            // "+N" abaixo), sem ganhar segmento próprio no traço.
-            const tagsParaFaixa = item.tags.slice(0, 3);
-            function corDaTagNome(nome: string) {
-              return corDaTag(coresPorTag[nome.trim().toLowerCase()] ?? 0, theme.mode);
-            }
-
-            // Evento urgente sobrepõe a cor de urgência no lugar das cores
-            // de tag (regra que já existia antes do item 4, sem mudança) —
-            // um único segmento sólido, não um por tag, já que a urgência é
-            // uma propriedade do evento, não de cada tag individualmente.
-            const segmentosFaixa: string[] = urgente
-              ? [theme.colors.urgent]
-              : tagsParaFaixa.length > 0
-              ? tagsParaFaixa.map((t) => corDaTagNome(t).base)
-              : [theme.colors.textMuted];
-
-            return (
-              <Swipeable
-                ref={(ref) => {
-                  swipeableRefs.current[item.id] = ref;
-                }}
-                overshootRight={false}
-                rightThreshold={40}
-                friction={2}
-                onSwipeableWillOpen={() => fecharOutrosSwipes(item.id)}
-                renderRightActions={() => (
-                  <View style={styles.acoesSwipeRow}>
-                    <Pressable style={styles.acaoFixar} onPress={() => handleAlternarFixado(item)}>
-                      <Feather
-                        name="map-pin"
-                        size={19}
-                        color={item.fixado ? theme.colors.accent : theme.colors.textMuted}
-                      />
-                    </Pressable>
-                    <Pressable style={styles.acaoApagar} onPress={() => handleApagar(item)}>
-                      <Feather name="trash-2" size={19} color={theme.colors.urgent} />
-                    </Pressable>
-                  </View>
-                )}
-              >
-                <Pressable
-                  style={({ pressed }) => [styles.card, { opacity: pressed ? 0.85 : 1 }]}
-                  onPress={() => handleEditar(item)}
-                >
-                  <View style={styles.faixa}>
-                    {segmentosFaixa.map((corSegmento, indice) => (
-                      <View key={indice} style={[styles.faixaSegmento, { backgroundColor: corSegmento }]} />
-                    ))}
-                  </View>
-                  <View style={styles.cardConteudo}>
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.cardTituloRow}>
-                        {item.fixado && <Feather name="map-pin" size={12} color={theme.colors.accent} />}
-                        {urgente && <Feather name="bell" size={12} color={theme.colors.urgent} />}
-                        <Text style={styles.cardTitulo} numberOfLines={1}>{item.titulo}</Text>
-                      </View>
-                      <View style={styles.cardMetaRow}>
-                        <Text style={[styles.cardData, urgente && styles.cardDataUrgente]}>
-                          {formatarDataLegivel(item.data)}
-                        </Text>
-                      </View>
-                      {/* MUDANÇA (item 4): pills de tag numa linha própria
-                          (flexWrap), separada da data — com até 3 tags por
-                          evento não cabem mais lado a lado com a data numa
-                          única linha compacta como antes (tag única). */}
-                      <View style={styles.cardTagsRow}>
-                        {item.tags.length === 0 ? (
-                          <View style={styles.cardTagPill}>
-                            <View style={[styles.cardTagBolinha, { backgroundColor: theme.colors.textMuted }]} />
-                            <Text style={styles.cardTagTexto} numberOfLines={1}>{SEM_TAG_LABEL}</Text>
-                          </View>
-                        ) : (
-                          <>
-                            {item.tags.slice(0, 3).map((nomeTag) => {
-                              const corTag = corDaTagNome(nomeTag);
-                              return (
-                                <View
-                                  key={nomeTag}
-                                  style={[styles.cardTagPill, { backgroundColor: corTag.base + TAG_WASH_ALPHA }]}
-                                >
-                                  <View style={[styles.cardTagBolinha, { backgroundColor: corTag.base }]} />
-                                  <Text style={[styles.cardTagTexto, { color: corTag.base }]} numberOfLines={1}>
-                                    {nomeTag}
-                                  </Text>
-                                </View>
-                              );
-                            })}
-                            {item.tags.length > 3 && (
-                              <View style={styles.cardTagPill}>
-                                <Text style={styles.cardTagTexto}>+{item.tags.length - 3}</Text>
-                              </View>
-                            )}
-                          </>
-                        )}
-                      </View>
-                    </View>
-                    <Text style={[styles.cardDias, urgente && styles.cardDiasUrgente]}>
-                      {formatarDiasRestantes(horasRestantes)}
-                    </Text>
-                  </View>
-                </Pressable>
-              </Swipeable>
-            );
-          }}
+          renderItem={renderItem}
         />
       )}
 
@@ -812,11 +981,20 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     },
     cardTituloRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     cardTitulo: { ...theme.typography.subheading, color: theme.colors.textPrimary, flexShrink: 1 },
-    cardMetaRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, marginTop: 5 },
+    // CORREÇÃO (bug 6): antes eram dois estilos (cardMetaRow + cardTagsRow),
+    // um embaixo do outro sempre. Um único container com flexWrap deixa a
+    // data e as pills de tag preencherem a mesma linha quando cabe, e só
+    // quebrar pra uma segunda linha quando não couber mais.
+    cardMetaTagsRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: 5,
+      marginTop: 5,
+    },
     // MUDANÇA (item 4): linha própria pra pills de tag (até 3 + indicador
     // "+N"), com flexWrap pra não estourar a largura do card quando várias
     // tags têm nomes longos.
-    cardTagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 5 },
     cardData: { ...theme.typography.caption, color: theme.colors.textSecondary },
     cardDataUrgente: { color: theme.colors.urgent, fontFamily: theme.typography.bodyMedium.fontFamily },
     cardTagPill: {

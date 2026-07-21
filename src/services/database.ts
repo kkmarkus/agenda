@@ -43,6 +43,7 @@ export function initDatabase(): void {
   migrarTagParaOpcional();
   migrarColunaFixado();
   migrarParaTagsMultiplas();
+  migrarDuplicatasDeTagsPorCase();
 
   // Migração: quem já tinha eventos salvos antes dessa tabela existir tem
   // tags sem nenhuma cor gravada ainda. Preenchemos aqui, uma vez, pra elas
@@ -122,6 +123,66 @@ function migrarParaTagsMultiplas(): void {
   definirPreferencia(PREF_MIGROU_EVENTO_TAGS, '1');
 }
 
+// Chave em `preferencias` usada só como flag de "já migrei" — mesmo padrão
+// de `PREF_MIGROU_EVENTO_TAGS` acima.
+const PREF_MIGROU_CASE_TAGS = 'migrou_duplicatas_tag_case';
+
+/**
+ * CORREÇÃO (bug 1 — tags duplicadas por case): antes dessa correção,
+ * `definirTagsDoEvento` gravava a tag exatamente como foi digitada, sem
+ * checar se já existia uma grafia diferente pro mesmo texto normalizado
+ * (ex: "Trabalho" e "trabalho" viravam duas linhas distintas em
+ * `evento_tags`, já que a PRIMARY KEY composta (evento_id, tag) é
+ * sensível a maiúsculas/minúsculas). Quem já usou o app antes dessa
+ * correção pode ter essas duplicatas gravadas — essa migração roda uma
+ * única vez, consolidando cada grupo de tags normalizado-iguais numa só
+ * grafia (a mais antiga, por rowid, pra manter o que ela já reconhece)
+ * em toda a base, não só dentro de um mesmo evento.
+ */
+function migrarDuplicatasDeTagsPorCase(): void {
+  if (obterPreferencia(PREF_MIGROU_CASE_TAGS) === '1') return;
+
+  const linhas = db.getAllSync<{ evento_id: number; tag: string; rowid: number }>(
+    `SELECT evento_id, tag, rowid FROM evento_tags ORDER BY rowid ASC;`
+  );
+
+  // 1) Decide a grafia canônica por chave normalizada: a primeira que
+  // apareceu (menor rowid).
+  const grafiaCanonica = new Map<string, string>();
+  linhas.forEach((l) => {
+    const chave = normalizarTag(l.tag);
+    if (!grafiaCanonica.has(chave)) grafiaCanonica.set(chave, l.tag);
+  });
+
+  // Nada a migrar (base nova, ou já sem duplicatas) — evita reconstruir
+  // a tabela à toa.
+  const temDuplicata = linhas.length > grafiaCanonica.size;
+  if (!temDuplicata) {
+    definirPreferencia(PREF_MIGROU_CASE_TAGS, '1');
+    return;
+  }
+
+  // 2) Reconstrói `evento_tags` usando só a grafia canônica, deduplicando
+  // por (evento_id, chave normalizada) — um evento que já tinha as duas
+  // grafias (ex: "Trabalho" e "trabalho" nele mesmo) vira uma linha só.
+  const marcasVistas = new Set<string>(); // `${evento_id}::${chave normalizada}`
+  db.withTransactionSync(() => {
+    db.runSync(`DELETE FROM evento_tags;`);
+    linhas.forEach((l) => {
+      const chave = normalizarTag(l.tag);
+      const marca = `${l.evento_id}::${chave}`;
+      if (marcasVistas.has(marca)) return;
+      marcasVistas.add(marca);
+      db.runSync(`INSERT OR IGNORE INTO evento_tags (evento_id, tag) VALUES (?, ?);`, [
+        l.evento_id,
+        grafiaCanonica.get(chave)!,
+      ]);
+    });
+  });
+
+  definirPreferencia(PREF_MIGROU_CASE_TAGS, '1');
+}
+
 export interface RegistroEvento {
   id: number;
   nativeEventId: string;
@@ -141,12 +202,23 @@ export interface RegistroEvento {
  * segmentado do Dashboard, onde a primeira tag vira o segmento do topo.
  */
 export function definirTagsDoEvento(eventoId: number, tags: string[]): void {
-  const tagsLimpas = Array.from(new Set(tags.map((t) => t.trim()).filter(Boolean)));
+  const tagsBrutas = Array.from(new Set(tags.map((t) => t.trim()).filter(Boolean)));
   db.withTransactionSync(() => {
     db.runSync(`DELETE FROM evento_tags WHERE evento_id = ?;`, [eventoId]);
-    tagsLimpas.forEach((t) => {
-      db.runSync(`INSERT OR IGNORE INTO evento_tags (evento_id, tag) VALUES (?, ?);`, [eventoId, t]);
-      garantirCorDaTag(t);
+    // CORREÇÃO (bug 1): resolve cada tag pra grafia já usada em algum
+    // outro evento (comparando normalizado) antes de gravar — evita que
+    // "Trabalho" e "trabalho" virem duas tags distintas. Dedup por chave
+    // normalizada de novo depois disso, já que duas tags diferentes no
+    // input podem canonicalizar pra mesma grafia (ex: ela digitou
+    // "Trabalho" e "trabalho" no mesmo evento).
+    const jaInseridas = new Set<string>();
+    tagsBrutas.forEach((tBruta) => {
+      const tCanonica = obterGrafiaCanonicaDaTag(tBruta);
+      const chave = normalizarTag(tCanonica);
+      if (jaInseridas.has(chave)) return;
+      jaInseridas.add(chave);
+      db.runSync(`INSERT OR IGNORE INTO evento_tags (evento_id, tag) VALUES (?, ?);`, [eventoId, tCanonica]);
+      garantirCorDaTag(tCanonica);
     });
   });
 }
@@ -243,7 +315,20 @@ export function listarTagsUnicas(): string[] {
   const linhas = db.getAllSync<{ tag: string }>(
     `SELECT DISTINCT tag FROM evento_tags ORDER BY tag COLLATE NOCASE;`
   );
-  return linhas.map((l) => l.tag);
+  // CORREÇÃO (bug 1): o DISTINCT acima é sensível a maiúsculas/minúsculas
+  // (só o ORDER BY é NOCASE). Com a escrita já canonicalizada em
+  // `definirTagsDoEvento`/`restaurarBackup`, isso não deveria mais
+  // acontecer pra tags novas — mas mantém como rede de segurança na
+  // leitura, caso alguma linha antiga escape da migração.
+  const vistas = new Set<string>();
+  const unicas: string[] = [];
+  linhas.forEach((l) => {
+    const chave = normalizarTag(l.tag);
+    if (vistas.has(chave)) return;
+    vistas.add(chave);
+    unicas.push(l.tag);
+  });
+  return unicas;
 }
 
 /**
@@ -278,6 +363,22 @@ export function contarPorTag(): { tag: string | null; total: number }[] {
 
 function normalizarTag(tag: string): string {
   return tag.trim().toLowerCase();
+}
+
+/**
+ * CORREÇÃO (bug 1): dado um texto de tag recém-digitado, retorna a grafia
+ * que já está gravada em `evento_tags` pra esse mesmo texto normalizado,
+ * se existir alguma — senão retorna o próprio texto (trim), que passa a
+ * ser a grafia canônica dali em diante. Usa `normalizarTag` (JS
+ * `toLowerCase`, cobre acentos) em vez de `COLLATE NOCASE` do SQLite
+ * (que só cobre ASCII), pra tratar corretamente tags como "Saúde"/"saúde".
+ */
+function obterGrafiaCanonicaDaTag(tagBruta: string): string {
+  const tagLimpa = tagBruta.trim();
+  const chave = normalizarTag(tagLimpa);
+  const linhas = db.getAllSync<{ tag: string }>(`SELECT DISTINCT tag FROM evento_tags;`);
+  const existente = linhas.find((l) => normalizarTag(l.tag) === chave);
+  return existente ? existente.tag : tagLimpa;
 }
 
 export function obterCorIndexDaTag(tag: string): number | null {
@@ -536,7 +637,14 @@ export function restaurarBackup(dados: BackupDados): void {
         [item.nativeEventId]
       );
       if (!registro) return;
-      db.runSync(`INSERT OR IGNORE INTO evento_tags (evento_id, tag) VALUES (?, ?);`, [registro.id, item.tag]);
+      // CORREÇÃO (bug 1): mesmo risco de duplicidade por case que existia
+      // em `definirTagsDoEvento` — um backup de outro dispositivo pode
+      // trazer uma grafia diferente da que já está gravada localmente.
+      const tagCanonica = obterGrafiaCanonicaDaTag(item.tag);
+      db.runSync(`INSERT OR IGNORE INTO evento_tags (evento_id, tag) VALUES (?, ?);`, [
+        registro.id,
+        tagCanonica,
+      ]);
     });
   });
 }

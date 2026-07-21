@@ -552,6 +552,52 @@ export function corDaTag(index: number, modo: 'light' | 'dark'): CorTag {
   return paleta[index % paleta.length];
 }
 
+// --- Paleta de tag "acentuada" (item D — opção 2 escolhida) ---
+// Mesmo matiz e luminosidade de TAG_PALETTE_LIGHT/DARK, só com saturação
+// mais alta (+13pp, mesma ordem de índice) — usada SÓ nos elementos
+// pequenos e "de identificação" (a bolinha de 6px do Dashboard, a faixa +
+// ícone do painel de Tags, as bolinhas do seletor de cor), nunca no fundo
+// lavado da pill nem no texto, que continuam na paleta original — é essa
+// diferença de saturação entre os dois usos que evita a tag competir com
+// o acento escolhido em qualquer combinação de preset (ver documento do
+// item D). `text` é reaproveitado da paleta original: como só a
+// saturação muda (luminosidade igual), o contraste calculado pra ela
+// continua válido.
+export const TAG_PALETTE_LIGHT_ACENTUADA: CorTag[] = [
+  { base: '#B15F20', text: '#FFFFFF' }, // terracota
+  { base: '#95791A', text: '#FFFFFF' }, // bronze
+  { base: '#63752E', text: '#FFFFFF' }, // oliva
+  { base: '#417533', text: '#FFFFFF' }, // grama
+  { base: '#3D8759', text: '#FFFFFF' }, // verde musgo
+  { base: '#307867', text: '#FFFFFF' }, // jade
+  { base: '#2F5E86', text: '#FFFFFF' }, // azul petróleo
+  { base: '#3B449B', text: '#FFFFFF' }, // índigo
+  { base: '#6B4B9B', text: '#FFFFFF' }, // ameixa
+  { base: '#743989', text: '#FFFFFF' }, // uva
+  { base: '#81285E', text: '#FFFFFF' }, // royal plum
+  { base: '#7F2E3C', text: '#FFFFFF' }, // cereja
+];
+
+export const TAG_PALETTE_DARK_ACENTUADA: CorTag[] = [
+  { base: '#E69956', text: '#331D08' }, // terracota
+  { base: '#D5B94E', text: '#332B08' }, // bronze
+  { base: '#ACC171', text: '#232B0D' }, // oliva
+  { base: '#82BE74', text: '#122B0D' }, // grama
+  { base: '#84CF9C', text: '#0C2414' }, // verde musgo
+  { base: '#78C4B2', text: '#0D2B24' }, // jade
+  { base: '#73A9D5', text: '#0B1D28' }, // azul petróleo
+  { base: '#8A90D1', text: '#0D0F2B' }, // índigo
+  { base: '#B599DF', text: '#221A34' }, // ameixa
+  { base: '#BA87CA', text: '#240D2B' }, // uva
+  { base: '#EAA2C9', text: '#33121A' }, // royal plum
+  { base: '#CD8390', text: '#2B0D12' }, // cereja
+];
+
+export function corDaTagAcentuada(index: number, modo: 'light' | 'dark'): CorTag {
+  const paleta = modo === 'dark' ? TAG_PALETTE_DARK_ACENTUADA : TAG_PALETTE_LIGHT_ACENTUADA;
+  return paleta[index % paleta.length];
+}
+
 // Exportado pra o database.ts saber quantas cores existem na hora de
 // auto-atribuir uma cor a uma tag nova (round-robin), sem duplicar o
 // número aqui e lá. As duas paletas têm sempre o mesmo tamanho.
