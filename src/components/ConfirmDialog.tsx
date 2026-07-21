@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Modal, View, Text, Pressable, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
@@ -15,6 +15,15 @@ type Props = {
   // mesma linguagem visual do botão de apagar por swipe no Dashboard
   // (urgentBg + borda urgent), em vez de inventar uma cor nova aqui.
   destrutivo?: boolean;
+  // MUDANÇA (item 2): terceira opção opcional, pra decisões de 3 vias como
+  // "Somente este evento" / "Este e os futuros" / "Cancelar" (edição e
+  // exclusão de eventos recorrentes). Sem ela, o diálogo continua com só
+  // as duas ações de sempre (nenhum uso existente precisa mudar). Quando
+  // presente, os botões empilham verticalmente em vez de lado a lado —
+  // três botões numa linha só ficariam apertados demais pros rótulos mais
+  // longos desse caso.
+  textoAcaoExtra?: string;
+  onAcaoExtra?: () => void;
   onConfirmar: () => void;
   onFechar: () => void;
 };
@@ -31,11 +40,14 @@ export default function ConfirmDialog({
   textoCancelar,
   textoConfirmar = 'OK',
   destrutivo = false,
+  textoAcaoExtra,
+  onAcaoExtra,
   onConfirmar,
   onFechar,
 }: Props) {
+  const temAcaoExtra = !!(textoAcaoExtra && onAcaoExtra);
   const theme = useTheme();
-  const styles = criarStyles(theme);
+  const styles = useMemo(() => criarStyles(theme), [theme]);
 
   return (
     <Modal visible={visivel} transparent animationType="fade" onRequestClose={onFechar}>
@@ -52,33 +64,71 @@ export default function ConfirmDialog({
           <Text style={styles.titulo}>{titulo}</Text>
           <Text style={styles.mensagem}>{mensagem}</Text>
 
-          <View style={styles.botoesRow}>
-            {textoCancelar && (
+          {temAcaoExtra ? (
+            <View style={styles.botoesColuna}>
               <Pressable
-                style={({ pressed }) => [styles.botaoSecundario, { opacity: pressed ? 0.7 : 1 }]}
-                onPress={onFechar}
+                style={({ pressed }) => [
+                  styles.botaoPrincipal,
+                  destrutivo && styles.botaoPrincipalDestrutivo,
+                  { opacity: pressed ? 0.85 : 1 },
+                ]}
+                onPress={onConfirmar}
               >
-                <Text style={styles.botaoSecundarioTexto} numberOfLines={1}>
-                  {textoCancelar}
+                <Text
+                  style={[styles.botaoPrincipalTexto, destrutivo && styles.botaoPrincipalTextoDestrutivo]}
+                  numberOfLines={1}
+                >
+                  {textoConfirmar}
                 </Text>
               </Pressable>
-            )}
-            <Pressable
-              style={({ pressed }) => [
-                styles.botaoPrincipal,
-                destrutivo && styles.botaoPrincipalDestrutivo,
-                { opacity: pressed ? 0.85 : 1 },
-              ]}
-              onPress={onConfirmar}
-            >
-              <Text
-                style={[styles.botaoPrincipalTexto, destrutivo && styles.botaoPrincipalTextoDestrutivo]}
-                numberOfLines={1}
+              <Pressable
+                style={({ pressed }) => [styles.botaoSecundario, { opacity: pressed ? 0.7 : 1 }]}
+                onPress={onAcaoExtra}
               >
-                {textoConfirmar}
-              </Text>
-            </Pressable>
-          </View>
+                <Text style={styles.botaoSecundarioTexto} numberOfLines={1}>
+                  {textoAcaoExtra}
+                </Text>
+              </Pressable>
+              {textoCancelar && (
+                <Pressable
+                  style={({ pressed }) => [styles.botaoTexto, { opacity: pressed ? 0.6 : 1 }]}
+                  onPress={onFechar}
+                >
+                  <Text style={styles.botaoSecundarioTexto} numberOfLines={1}>
+                    {textoCancelar}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <View style={styles.botoesRow}>
+              {textoCancelar && (
+                <Pressable
+                  style={({ pressed }) => [styles.botaoSecundario, { opacity: pressed ? 0.7 : 1 }]}
+                  onPress={onFechar}
+                >
+                  <Text style={styles.botaoSecundarioTexto} numberOfLines={1}>
+                    {textoCancelar}
+                  </Text>
+                </Pressable>
+              )}
+              <Pressable
+                style={({ pressed }) => [
+                  styles.botaoPrincipal,
+                  destrutivo && styles.botaoPrincipalDestrutivo,
+                  { opacity: pressed ? 0.85 : 1 },
+                ]}
+                onPress={onConfirmar}
+              >
+                <Text
+                  style={[styles.botaoPrincipalTexto, destrutivo && styles.botaoPrincipalTextoDestrutivo]}
+                  numberOfLines={1}
+                >
+                  {textoConfirmar}
+                </Text>
+              </Pressable>
+            </View>
+          )}
         </Pressable>
       </Pressable>
     </Modal>
@@ -143,6 +193,11 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       lineHeight: 20,
     },
     botoesRow: { flexDirection: 'row', gap: theme.spacing.sm },
+    // MUDANÇA (item 2): layout empilhado pra quando há 3 opções — lado a
+    // lado ficaria apertado demais pros rótulos mais longos desse caso
+    // ("Este e os futuros").
+    botoesColuna: { gap: theme.spacing.sm },
+    botaoTexto: { alignItems: 'center', justifyContent: 'center', paddingVertical: theme.spacing.xs },
     // minHeight fixo nos dois botões: o texto muda de tamanho conforme o
     // estado ("Cancelar" vs "Apagar" vs "Entendi"), mas a altura do botão
     // não pode mudar por causa disso — mesmo raciocínio aplicado nos

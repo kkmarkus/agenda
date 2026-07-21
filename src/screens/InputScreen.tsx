@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Text, TextInput, Pressable, View, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { parseTextoLivre } from '../services/eventParser';
+import { parseMultiplosEventos, parseTextoLivre } from '../services/eventParser';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme/ThemeContext';
 
@@ -22,27 +22,43 @@ export default function InputScreen({ navigation }: Props) {
   function handleAnalisarTexto() {
     if (!textoLivre.trim()) return;
 
-    const extraido = parseTextoLivre(textoLivre);
+    // MUDANÇA (item 3): `parseMultiplosEventos` reconhece listas (com ou
+    // sem marcador) e parágrafos corridos com mais de uma data solta — pra
+    // um texto normal com um compromisso só, ela devolve exatamente um
+    // item, igual `parseTextoLivre` faria sozinha.
+    const extraidos = parseMultiplosEventos(textoLivre);
 
-    // Mesmo se o parser não achar data, seguimos pra tela de confirmação —
-    // ela completa manualmente lá. O app nunca trava o fluxo por falha de extração.
+    if (extraidos.length > 1) {
+      // Mais de um evento detectado: tela de revisão em lote, um card por
+      // evento — não pula direto pra ConfirmScreen (que só sabe editar um
+      // de cada vez) pra não obrigá-la a repetir o fluxo inteiro N vezes.
+      navigation.navigate('ConfirmarMultiplos', { eventos: extraidos });
+      return;
+    }
+
+    // 0 ou 1 evento detectado: segue o fluxo normal de sempre, sem
+    // introduzir uma tela extra pro caso comum (evento único). Com 0
+    // detectados, ainda assim vale a pena tentar `parseTextoLivre` no
+    // texto inteiro — ela pode ter escrito algo que nem `parseTextoLivre`
+    // nem a heurística de múltiplos reconheceram como data, e completa
+    // manualmente na ConfirmScreen (o app nunca trava o fluxo por falha
+    // de extração).
+    const extraido = extraidos[0] ?? parseTextoLivre(textoLivre);
+
     navigation.navigate('Confirmar', {
       rascunho: {
         titulo: extraido.titulo,
         data: extraido.data ?? undefined,
+        recorrencia: extraido.recorrencia,
       },
       dataFim: extraido.dataFim ?? undefined,
     });
   }
 
-  const styles = criarStyles(theme);
+  const styles = useMemo(() => criarStyles(theme), [theme]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <Pressable style={({ pressed }) => [styles.voltar, { opacity: pressed ? 0.6 : 1 }]} onPress={() => navigation.goBack()} hitSlop={10}>
-        <Feather name="arrow-left" size={18} color={theme.colors.textSecondary} />
-      </Pressable>
-
       <View style={styles.iconeCirculo}>
         <Feather name="edit-3" size={19} color={theme.colors.accentText} />
       </View>
@@ -81,17 +97,6 @@ export default function InputScreen({ navigation }: Props) {
 function criarStyles(theme: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
     container: { flex: 1, padding: theme.spacing.lg, backgroundColor: theme.colors.background },
-    voltar: {
-      width: 34,
-      height: 34,
-      borderRadius: theme.radius.pill,
-      backgroundColor: theme.colors.surface,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginBottom: theme.spacing.lg,
-    },
     iconeCirculo: {
       width: 44,
       height: 44,
@@ -99,6 +104,7 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       backgroundColor: theme.colors.accent,
       alignItems: 'center',
       justifyContent: 'center',
+      marginTop: theme.spacing.md,
       marginBottom: theme.spacing.md,
     },
     overline: { ...theme.typography.overline, color: theme.colors.accent },

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -16,21 +16,37 @@ import {
   criarEventoNaAgenda,
   atualizarEventoNaAgenda,
 } from '../services/calendarService';
-import { salvarRegistro, listarTagsUnicas, atualizarTagPorNativeId, listarCoresDeTags } from '../services/database';
+import {
+  salvarRegistro,
+  listarTagsUnicas,
+  atualizarTagsPorNativeId,
+  listarCoresDeTags,
+  obterPreferencia,
+  PREF_DURACAO_PADRAO_MINUTOS,
+  PREF_ANTECEDENCIA_ALARME_PADRAO_MINUTOS,
+} from '../services/database';
 import { NovoEvento } from '../types/event';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme/ThemeContext';
 import { corDaTag } from '../theme/theme';
 import ConfirmDialog from '../components/ConfirmDialog';
+import {
+  formatarData,
+  formatarHora,
+  combinarDataEHora,
+  combinarComHora,
+  abrirDatePicker,
+  abrirTimePicker,
+} from '../utils/dataHora';
 
 // CORREÇÃO: Props simplificado próprio substituído pelo tipo real de navegação.
 type Props = NativeStackScreenProps<RootStackParamList, 'Confirmar'>;
 
 export default function ConfirmScreen({ navigation, route }: Props) {
   const theme = useTheme();
-  const styles = criarStyles(theme);
+  const styles = useMemo(() => criarStyles(theme), [theme]);
 
-  const { rascunho, nativeEventId, dataFim } = route.params;
+  const { rascunho, nativeEventId, dataFim, ocorrencia } = route.params;
   const modoEdicao = !!nativeEventId;
   // Intervalo só faz sentido na criação — depois de salvo, os dois eventos
   // (início/prazo final) passam a ser independentes, cada um editável na
@@ -38,11 +54,45 @@ export default function ConfirmScreen({ navigation, route }: Props) {
   const ehIntervalo = !!dataFim && !modoEdicao;
 
   const [titulo, setTitulo] = useState(rascunho.titulo ?? '');
-  const [dataStr, setDataStr] = useState(formatarData(rascunho.data));
-  const [dataFimStr, setDataFimStr] = useState(formatarData(dataFim));
-  const [horaStr, setHoraStr] = useState(formatarHora(rascunho.data));
+  // MUDANÇA (item 9.1): data/hora deixam de ser TextInput livre validado
+  // por regex (`montarData`, que aceitava datas impossíveis como 31/02 e
+  // deixava o `Date` do JS "rolar" pro mês seguinte silenciosamente) e
+  // passam a vir sempre de um picker nativo — ou seja, o estado aqui é um
+  // `Date` de verdade, nunca uma string a validar. Sem data detectada pelo
+  // parser, começa em "agora": um picker sempre precisa de um valor pra
+  // exibir, diferente de um TextInput que podia começar vazio.
+  const [data, setData] = useState<Date>(rascunho.data ?? new Date());
+  const [dataFimIntervalo, setDataFimIntervalo] = useState<Date>(dataFim ?? rascunho.data ?? new Date());
   const [descricao, setDescricao] = useState(rascunho.descricao ?? '');
-  const [tag, setTag] = useState(rascunho.tag ?? '');
+  // MUDANÇA (item 4): campo de tag única virou lista de tags selecionadas
+  // + um texto solto pra criar uma tag nova. `tagsSelecionadas` guarda o
+  // texto exatamente como foi digitado/escolhido (mesmo padrão de
+  // `renomearOuMesclarTag`: grava como veio, só a chave de cor é
+  // normalizada) — a ORDEM da lista importa pro traço lateral segmentado
+  // do Dashboard (primeira tag = primeiro segmento).
+  const [tagsSelecionadas, setTagsSelecionadas] = useState<string[]>(rascunho.tags ?? []);
+  const [novaTagTexto, setNovaTagTexto] = useState('');
+  // MUDANÇA (item 1): duração e antecedência do alarme deixam de ser fixas.
+  // Em modo edição também partimos do padrão (60min/30min), já que a
+  // agenda nativa não devolve esses valores de volta pra gente pré-selecionar
+  // o que já estava configurado (mesma limitação já documentada em
+  // atualizarEventoNaAgenda, agora refletida aqui na tela).
+  const [duracaoOpcao, setDuracaoOpcao] = useState<'30' | '60' | '120' | 'diaInteiro' | 'personalizado'>('60');
+  const [duracaoPersonalizadaStr, setDuracaoPersonalizadaStr] = useState('');
+  // undefined = "um dia só" (mesmo dia de `data`) — diferente de string vazia,
+  // não precisa de validação de formato porque só existe via picker.
+  const [dataFimDiaInteiro, setDataFimDiaInteiro] = useState<Date | undefined>(undefined);
+  const [antecedenciaOpcao, setAntecedenciaOpcao] = useState<'10' | '30' | '60' | '1440' | 'sem'>('30');
+  // MUDANÇA (item 2): 'nenhuma' é o padrão — o seletor fica sempre visível
+  // e editável, mesmo quando o parser não detectou repetição nenhuma (ela
+  // pode marcar recorrência manualmente num evento digitado sem indicar
+  // repetição). Quando o parser detecta (rascunho.recorrencia), ou quando
+  // ela está editando um evento que já é recorrente (rascunho.recorrencia
+  // também vem populado nesse caso — ver DashboardScreen), o valor inicial
+  // já vem pré-selecionado.
+  const [recorrenciaOpcao, setRecorrenciaOpcao] = useState<'nenhuma' | 'diaria' | 'semanal' | 'mensal'>(
+    rascunho.recorrencia?.frequencia ?? 'nenhuma'
+  );
   const [tagsExistentes, setTagsExistentes] = useState<string[]>([]);
   const [coresPorTag, setCoresPorTag] = useState<Record<string, number>>({});
   const [salvando, setSalvando] = useState(false);
@@ -58,6 +108,123 @@ export default function ConfirmScreen({ navigation, route }: Props) {
     setCoresPorTag(listarCoresDeTags());
   }, []);
 
+  // MUDANÇA (8.1): os seletores de duração/antecedência partem dos padrões
+  // definidos em Configurações (SettingsDrawer), em vez dos 60min/30min
+  // hardcoded. Só sobrescreve o estado se houver um padrão salvo — sem
+  // preferência gravada ainda (app recém-instalado), mantém os defaults
+  // '60'/'30' já assumidos no useState. Roda uma vez só: como é o valor
+  // *inicial* do formulário, mudar a preferência global depois de a tela
+  // já estar aberta não deve arrastar a seleção que ela já estava fazendo.
+  useEffect(() => {
+    const duracaoSalva = obterPreferencia(PREF_DURACAO_PADRAO_MINUTOS);
+    if (duracaoSalva === '30' || duracaoSalva === '60' || duracaoSalva === '120') {
+      setDuracaoOpcao(duracaoSalva);
+    }
+    const antecedenciaSalva = obterPreferencia(PREF_ANTECEDENCIA_ALARME_PADRAO_MINUTOS);
+    if (
+      antecedenciaSalva === '10' ||
+      antecedenciaSalva === '30' ||
+      antecedenciaSalva === '60' ||
+      antecedenciaSalva === '1440'
+    ) {
+      setAntecedenciaOpcao(antecedenciaSalva);
+    }
+  }, []);
+
+  // MUDANÇA (item 1 + 9.1): traduz a opção de chip selecionada pros campos
+  // reais de NovoEvento. Só "Personalizado" ainda valida um TextInput (é
+  // número de minutos, não uma data — não faz sentido num date picker);
+  // "Dia inteiro" não precisa mais validar formato de data nenhum, porque
+  // `dataFimDiaInteiro` só existe como `Date` já válido vindo do picker.
+  // Ainda validamos a ORDEM das datas (fim antes do início), que é uma
+  // regra de negócio, não um problema de formato — o picker não impede
+  // ela de escolher um "último dia" anterior ao início por engano.
+  function montarDuracaoEDiaInteiro(
+    dataInicio: Date
+  ):
+    | { ok: true; diaInteiro: boolean; duracaoMinutos?: number; dataFimDiaInteiro?: Date }
+    | { ok: false; titulo: string; mensagem: string } {
+    if (duracaoOpcao === 'diaInteiro') {
+      if (!dataFimDiaInteiro) {
+        return { ok: true, diaInteiro: true };
+      }
+      const inicioSoData = new Date(dataInicio.getFullYear(), dataInicio.getMonth(), dataInicio.getDate());
+      const fimSoData = new Date(
+        dataFimDiaInteiro.getFullYear(),
+        dataFimDiaInteiro.getMonth(),
+        dataFimDiaInteiro.getDate()
+      );
+      if (fimSoData.getTime() < inicioSoData.getTime()) {
+        return {
+          ok: false,
+          titulo: 'Datas fora de ordem',
+          mensagem: 'O fim do dia inteiro precisa ser igual ou depois da data do evento.',
+        };
+      }
+      return { ok: true, diaInteiro: true, dataFimDiaInteiro: fimSoData };
+    }
+
+    if (duracaoOpcao === 'personalizado') {
+      const minutos = Number(duracaoPersonalizadaStr);
+      if (!duracaoPersonalizadaStr.trim() || !Number.isFinite(minutos) || minutos <= 0) {
+        return {
+          ok: false,
+          titulo: 'Duração inválida',
+          mensagem: 'Digite a duração personalizada em minutos (um número maior que zero).',
+        };
+      }
+      return { ok: true, diaInteiro: false, duracaoMinutos: Math.round(minutos) };
+    }
+
+    return { ok: true, diaInteiro: false, duracaoMinutos: Number(duracaoOpcao) };
+  }
+
+  // MUDANÇA (item 2): traduz a opção de chip selecionada pro formato
+  // Recorrencia. diaSemana/diaDoMes vêm da data-base do próprio evento —
+  // se ela mudou a data no formulário, a recorrência acompanha a nova
+  // data (ex: escolheu "semanal" numa quinta, repete toda quinta a partir
+  // dali), não o dia detectado originalmente pelo parser.
+  function montarRecorrencia(dataInicio: Date): NovoEvento['recorrencia'] {
+    if (recorrenciaOpcao === 'nenhuma') return null;
+    if (recorrenciaOpcao === 'diaria') return { frequencia: 'diaria' };
+    if (recorrenciaOpcao === 'semanal') return { frequencia: 'semanal', diaSemana: dataInicio.getDay() };
+    return { frequencia: 'mensal', diaDoMes: dataInicio.getDate() };
+  }
+
+  // MUDANÇA (item 4): substitui o antigo `setTag(t)` de seleção única.
+  // Comparação case-insensitive (mesmo critério usado em toda a app pra
+  // "é a mesma tag") pra não deixar ela adicionar "Trabalho" duas vezes
+  // com capitalizações diferentes sem perceber.
+  function tagJaSelecionada(t: string): boolean {
+    const chave = t.trim().toLowerCase();
+    return tagsSelecionadas.some((existente) => existente.trim().toLowerCase() === chave);
+  }
+
+  function adicionarTag(t: string) {
+    const texto = t.trim();
+    if (!texto || tagJaSelecionada(texto)) return;
+    setTagsSelecionadas((atual) => [...atual, texto]);
+  }
+
+  function removerTag(t: string) {
+    setTagsSelecionadas((atual) => atual.filter((existente) => existente !== t));
+  }
+
+  // Chip de tag já usada antes (autocomplete): alterna a seleção em vez de
+  // substituir — é assim que a lista vira multi-select.
+  function alternarTagExistente(t: string) {
+    if (tagJaSelecionada(t)) {
+      setTagsSelecionadas((atual) => atual.filter((existente) => existente.trim().toLowerCase() !== t.trim().toLowerCase()));
+    } else {
+      setTagsSelecionadas((atual) => [...atual, t]);
+    }
+  }
+
+  function handleAdicionarNovaTag() {
+    adicionarTag(novaTagTexto);
+    setNovaTagTexto('');
+  }
+
   async function handleSalvar() {
     if (!titulo.trim()) {
       setAviso({ titulo: 'Falta o título', mensagem: 'Digite um título pro evento antes de salvar.' });
@@ -68,15 +235,23 @@ export default function ConfirmScreen({ navigation, route }: Props) {
       await handleSalvarIntervalo();
       return;
     }
-
-    const data = montarData(dataStr, horaStr);
-    if (!data) {
-      setAviso({ titulo: 'Data inválida', mensagem: 'Confira o formato: dd/mm/aaaa e HH:mm.' });
-      return;
-    }
+    // MUDANÇA (item 9.1): não existe mais checagem de "Data inválida" aqui
+    // — `data` vem sempre de um picker nativo, então já é um `Date` válido
+    // por construção (esse era exatamente o bug que esse item corrigia:
+    // texto livre tipo "31/02" era aceito e o `Date` do JS rolava
+    // silenciosamente pro mês seguinte).
     // MUDANÇA: tag deixou de ser obrigatória. Antes essa validação bloqueava
     // o salvamento sem uma tag; agora um evento sem tag é um estado válido
     // (cai no grupo "Sem tag" no Dashboard e na tela de Tags).
+
+    // MUDANÇA (item 1): valida a duração/dia inteiro escolhidos antes de
+    // gastar uma chamada de permissão — mesmo padrão das validações acima
+    // (falhar cedo, sem tocar a agenda nativa).
+    const duracaoResultado = montarDuracaoEDiaInteiro(data);
+    if (!duracaoResultado.ok) {
+      setAviso({ titulo: duracaoResultado.titulo, mensagem: duracaoResultado.mensagem });
+      return;
+    }
 
     setSalvando(true);
     try {
@@ -90,18 +265,27 @@ export default function ConfirmScreen({ navigation, route }: Props) {
         titulo: titulo.trim(),
         data,
         descricao: descricao.trim() || undefined,
-        tag: tag.trim() || null,
+        tags: tagsSelecionadas,
+        diaInteiro: duracaoResultado.diaInteiro,
+        duracaoMinutos: duracaoResultado.diaInteiro ? undefined : duracaoResultado.duracaoMinutos,
+        dataFimDiaInteiro: duracaoResultado.diaInteiro ? duracaoResultado.dataFimDiaInteiro : undefined,
+        antecedenciaAlarmeMinutos: antecedenciaOpcao === 'sem' ? null : Number(antecedenciaOpcao),
+        recorrencia: montarRecorrencia(data),
       };
 
       if (modoEdicao && nativeEventId) {
         // MELHORIA: modo edição — atualiza o evento existente na agenda
-        // nativa e a tag no banco local, em vez de criar um registro novo
+        // nativa e as tags no banco local, em vez de criar um registro novo
         // (o que antes duplicava o evento e deixava o antigo órfão).
-        await atualizarEventoNaAgenda(nativeEventId, evento);
-        atualizarTagPorNativeId(nativeEventId, evento.tag);
+        // MUDANÇA (item 2): `ocorrencia` só vem preenchido quando o evento
+        // editado já era recorrente e ela escolheu o escopo no Dashboard
+        // ("Somente este" ou "Este e os futuros") antes de chegar aqui —
+        // sem ele, o expo-calendar trata como edição de um evento comum.
+        await atualizarEventoNaAgenda(nativeEventId, evento, ocorrencia);
+        atualizarTagsPorNativeId(nativeEventId, evento.tags);
       } else {
         const novoNativeEventId = await criarEventoNaAgenda(evento);
-        salvarRegistro(novoNativeEventId, evento.tag);
+        salvarRegistro(novoNativeEventId, evento.tags);
       }
 
       navigation.navigate('Dashboard');
@@ -121,13 +305,13 @@ export default function ConfirmScreen({ navigation, route }: Props) {
    * barra de "evento de vários dias" na agenda nativa.
    */
   async function handleSalvarIntervalo() {
-    const inicio = montarData(dataStr, horaStr);
-    const fim = montarData(dataFimStr, horaStr);
+    const inicio = data;
+    // MUDANÇA (item 9.1): o horário do fim é sempre o mesmo de `data`
+    // (compartilhado, como já era antes com horaStr) — só o dia vem de
+    // `dataFimIntervalo`. Sem TextInput livre, não existe mais "Data
+    // inválida" pra validar aqui: só resta checar a ORDEM das datas.
+    const fim = combinarComHora(dataFimIntervalo, data);
 
-    if (!inicio || !fim) {
-      setAviso({ titulo: 'Data inválida', mensagem: 'Confira o formato das duas datas: dd/mm/aaaa e HH:mm.' });
-      return;
-    }
     if (fim.getTime() < inicio.getTime()) {
       setAviso({ titulo: 'Datas fora de ordem', mensagem: 'A data final precisa ser igual ou depois da data de início.' });
       return;
@@ -142,26 +326,26 @@ export default function ConfirmScreen({ navigation, route }: Props) {
       }
 
       const tituloBase = titulo.trim();
-      const tagFinal = tag.trim() || null;
+      const tagsFinal = tagsSelecionadas;
       const descricaoFinal = descricao.trim() || undefined;
 
       const eventoInicio: NovoEvento = {
         titulo: `Início: ${tituloBase}`,
         data: inicio,
         descricao: descricaoFinal,
-        tag: tagFinal,
+        tags: tagsFinal,
       };
       const eventoFim: NovoEvento = {
         titulo: `Prazo final: ${tituloBase}`,
         data: fim,
         descricao: descricaoFinal,
-        tag: tagFinal,
+        tags: tagsFinal,
       };
 
       const idInicio = await criarEventoNaAgenda(eventoInicio);
-      salvarRegistro(idInicio, tagFinal);
+      salvarRegistro(idInicio, tagsFinal);
       const idFim = await criarEventoNaAgenda(eventoFim);
-      salvarRegistro(idFim, tagFinal);
+      salvarRegistro(idFim, tagsFinal);
 
       navigation.navigate('Dashboard');
     } catch (erro) {
@@ -202,30 +386,26 @@ export default function ConfirmScreen({ navigation, route }: Props) {
               <Feather name="calendar" size={13} color={theme.colors.textMuted} />
               <Text style={styles.label}>{ehIntervalo ? 'INÍCIO' : 'DATA'}</Text>
             </View>
-            <TextInput
-              style={[styles.input, campoFocado === 'data' && styles.inputFocado]}
-              placeholder="dd/mm/aaaa"
-              placeholderTextColor={theme.colors.textMuted}
-              value={dataStr}
-              onChangeText={setDataStr}
-              onFocus={() => setCampoFocado('data')}
-              onBlur={() => setCampoFocado(null)}
-            />
+            <Pressable
+              style={({ pressed }) => [styles.input, styles.inputPressable, { opacity: pressed ? 0.8 : 1 }]}
+              onPress={() => abrirDatePicker(data, (novaData) => setData((atual) => combinarDataEHora(atual, novaData)))}
+            >
+              <Text style={styles.inputPressableTexto}>{formatarData(data)}</Text>
+              <Feather name="chevron-down" size={14} color={theme.colors.textMuted} />
+            </Pressable>
           </View>
           <View style={styles.inputMetade}>
             <View style={styles.labelComIcone}>
               <Feather name="clock" size={13} color={theme.colors.textMuted} />
               <Text style={styles.label}>HORA</Text>
             </View>
-            <TextInput
-              style={[styles.input, campoFocado === 'hora' && styles.inputFocado]}
-              placeholder="HH:mm"
-              placeholderTextColor={theme.colors.textMuted}
-              value={horaStr}
-              onChangeText={setHoraStr}
-              onFocus={() => setCampoFocado('hora')}
-              onBlur={() => setCampoFocado(null)}
-            />
+            <Pressable
+              style={({ pressed }) => [styles.input, styles.inputPressable, { opacity: pressed ? 0.8 : 1 }]}
+              onPress={() => abrirTimePicker(data, (novaHora) => setData((atual) => combinarComHora(atual, novaHora)))}
+            >
+              <Text style={styles.inputPressableTexto}>{formatarHora(data)}</Text>
+              <Feather name="chevron-down" size={14} color={theme.colors.textMuted} />
+            </Pressable>
           </View>
         </View>
 
@@ -235,18 +415,160 @@ export default function ConfirmScreen({ navigation, route }: Props) {
               <Feather name="flag" size={13} color={theme.colors.textMuted} />
               <Text style={styles.label}>PRAZO FINAL</Text>
             </View>
-            <TextInput
-              style={[styles.input, campoFocado === 'dataFim' && styles.inputFocado]}
-              placeholder="dd/mm/aaaa"
-              placeholderTextColor={theme.colors.textMuted}
-              value={dataFimStr}
-              onChangeText={setDataFimStr}
-              onFocus={() => setCampoFocado('dataFim')}
-              onBlur={() => setCampoFocado(null)}
-            />
+            <Pressable
+              style={({ pressed }) => [styles.input, styles.inputPressable, { opacity: pressed ? 0.8 : 1 }]}
+              onPress={() =>
+                abrirDatePicker(dataFimIntervalo, (novaData) =>
+                  setDataFimIntervalo((atual) => combinarDataEHora(atual, novaData))
+                )
+              }
+            >
+              <Text style={styles.inputPressableTexto}>{formatarData(dataFimIntervalo)}</Text>
+              <Feather name="chevron-down" size={14} color={theme.colors.textMuted} />
+            </Pressable>
             <Text style={styles.dicaHoraCompartilhada}>
-              O horário acima ({horaStr || '08:00'}) é usado nos dois eventos.
+              O horário acima ({formatarHora(data)}) é usado nos dois eventos.
             </Text>
+          </>
+        )}
+
+        {/* MUDANÇA (item 1): duração e alarme configuráveis. Escondidos no
+            fluxo de intervalo (início + prazo final) porque esse fluxo cria
+            dois eventos pontuais e continua usando os padrões (60min/30min),
+            sem uma "duração" ou "dia inteiro" que faça sentido pra ele. */}
+        {!ehIntervalo && (
+          <>
+            <View style={styles.labelComIcone}>
+              <Feather name="clock" size={13} color={theme.colors.textMuted} />
+              <Text style={styles.label}>DURAÇÃO</Text>
+            </View>
+            <View style={styles.chipsRow}>
+              {OPCOES_DURACAO.map((opcao) => {
+                const selecionada = duracaoOpcao === opcao.valor;
+                return (
+                  <Pressable
+                    key={opcao.valor}
+                    style={({ pressed }) => [
+                      styles.chip,
+                      selecionada && styles.chipSelecionado,
+                      { opacity: pressed ? 0.7 : 1 },
+                    ]}
+                    onPress={() => setDuracaoOpcao(opcao.valor)}
+                  >
+                    <Text style={[styles.chipTexto, selecionada && styles.chipTextoSelecionado]}>
+                      {opcao.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {duracaoOpcao === 'personalizado' && (
+              <TextInput
+                style={[styles.input, campoFocado === 'duracaoPersonalizada' && styles.inputFocado]}
+                placeholder="Duração em minutos, ex: 90"
+                placeholderTextColor={theme.colors.textMuted}
+                keyboardType="number-pad"
+                value={duracaoPersonalizadaStr}
+                onChangeText={setDuracaoPersonalizadaStr}
+                onFocus={() => setCampoFocado('duracaoPersonalizada')}
+                onBlur={() => setCampoFocado(null)}
+              />
+            )}
+
+            {duracaoOpcao === 'diaInteiro' && (
+              <>
+                <Text style={styles.dicaHoraCompartilhada}>
+                  Deixe igual ao início pra um evento de um dia só, ou escolha o último dia (ex: viagem, prova de
+                  múltiplos dias).
+                </Text>
+                <Pressable
+                  style={({ pressed }) => [styles.input, styles.inputPressable, { opacity: pressed ? 0.8 : 1 }]}
+                  onPress={() =>
+                    abrirDatePicker(dataFimDiaInteiro ?? data, (novaData) =>
+                      setDataFimDiaInteiro(new Date(novaData.getFullYear(), novaData.getMonth(), novaData.getDate()))
+                    )
+                  }
+                >
+                  <Text style={styles.inputPressableTexto}>
+                    {dataFimDiaInteiro ? formatarData(dataFimDiaInteiro) : 'Igual ao início (um dia só)'}
+                  </Text>
+                  <Feather name="chevron-down" size={14} color={theme.colors.textMuted} />
+                </Pressable>
+                {dataFimDiaInteiro && (
+                  <Pressable
+                    style={({ pressed }) => [styles.limparLink, { opacity: pressed ? 0.6 : 1 }]}
+                    onPress={() => setDataFimDiaInteiro(undefined)}
+                  >
+                    <Feather name="rotate-ccw" size={12} color={theme.colors.accent} />
+                    <Text style={styles.limparLinkTexto}>Voltar a um dia só</Text>
+                  </Pressable>
+                )}
+              </>
+            )}
+
+            <View style={styles.labelComIcone}>
+              <Feather name="bell" size={13} color={theme.colors.textMuted} />
+              <Text style={styles.label}>ANTECEDÊNCIA DO ALARME</Text>
+            </View>
+            <View style={styles.chipsRow}>
+              {OPCOES_ANTECEDENCIA.map((opcao) => {
+                const selecionada = antecedenciaOpcao === opcao.valor;
+                return (
+                  <Pressable
+                    key={opcao.valor}
+                    style={({ pressed }) => [
+                      styles.chip,
+                      selecionada && styles.chipSelecionado,
+                      { opacity: pressed ? 0.7 : 1 },
+                    ]}
+                    onPress={() => setAntecedenciaOpcao(opcao.valor)}
+                  >
+                    <Text style={[styles.chipTexto, selecionada && styles.chipTextoSelecionado]}>
+                      {opcao.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* MUDANÇA (item 2): seletor de recorrência. Sempre visível,
+                mesmo quando o parser não detectou nenhuma repetição — ela
+                pode marcar recorrência manualmente num evento que digitou
+                sem indicar repetição nenhuma. */}
+            <View style={styles.labelComIcone}>
+              <Feather name="repeat" size={13} color={theme.colors.textMuted} />
+              <Text style={styles.label}>REPETIR</Text>
+            </View>
+            <View style={styles.chipsRow}>
+              {OPCOES_RECORRENCIA.map((opcao) => {
+                const selecionada = recorrenciaOpcao === opcao.valor;
+                return (
+                  <Pressable
+                    key={opcao.valor}
+                    style={({ pressed }) => [
+                      styles.chip,
+                      selecionada && styles.chipSelecionado,
+                      { opacity: pressed ? 0.7 : 1 },
+                    ]}
+                    onPress={() => setRecorrenciaOpcao(opcao.valor)}
+                  >
+                    <Text style={[styles.chipTexto, selecionada && styles.chipTextoSelecionado]}>
+                      {opcao.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {recorrenciaOpcao !== 'nenhuma' && (
+              <Text style={styles.dicaHoraCompartilhada}>
+                {recorrenciaOpcao === 'diaria' && 'Repete todo dia, sem data de término definida.'}
+                {recorrenciaOpcao === 'semanal' &&
+                  `Repete toda ${NOMES_DIA_SEMANA_EXTENSO[data.getDay()]}, sem data de término definida.`}
+                {recorrenciaOpcao === 'mensal' &&
+                  `Repete todo dia ${data.getDate()} do mês, sem data de término definida.`}
+              </Text>
+            )}
           </>
         )}
 
@@ -264,53 +586,79 @@ export default function ConfirmScreen({ navigation, route }: Props) {
 
         <View style={styles.labelComIcone}>
           <Feather name="tag" size={13} color={theme.colors.textMuted} />
-          <Text style={styles.label}>TAG (OPCIONAL)</Text>
+          <Text style={styles.label}>TAGS (OPCIONAL)</Text>
         </View>
-        <TextInput
-          style={[styles.input, campoFocado === 'tag' && styles.inputFocado]}
-          placeholder="Ex: Universidade"
-          placeholderTextColor={theme.colors.textMuted}
-          value={tag}
-          onChangeText={setTag}
-          onFocus={() => setCampoFocado('tag')}
-          onBlur={() => setCampoFocado(null)}
-        />
 
-        {tagsExistentes.length > 0 && (
+        {/* MUDANÇA (item 4): tags já adicionadas a este evento, como chips
+            removíveis (padrão "chips de convidados" de apps de e-mail) —
+            ficam ACIMA do campo de criar tag nova, pra deixar claro que já
+            fazem parte do evento, não são só sugestões. */}
+        {tagsSelecionadas.length > 0 && (
           <View style={styles.chipsRow}>
-            {/* Chip "Sem tag": limpa o campo, pra ela poder desfazer uma
-                seleção de tag sem precisar apagar o texto manualmente. */}
-            <Pressable
-              style={({ pressed }) => [
-                styles.chip,
-                tag.trim() === '' && styles.chipSelecionado,
-                { opacity: pressed ? 0.7 : 1 },
-              ]}
-              onPress={() => setTag('')}
-            >
-              <Feather name="slash" size={11} color={theme.colors.textMuted} />
-              <Text style={[styles.chipTexto, tag.trim() === '' && styles.chipTextoSelecionado]}>
-                Sem tag
-              </Text>
-            </Pressable>
-            {tagsExistentes.map((t) => {
-              const selecionada = t.trim().toLowerCase() === tag.trim().toLowerCase();
+            {tagsSelecionadas.map((t) => {
               const cor = corDaTag(coresPorTag[t.trim().toLowerCase()] ?? 0, theme.mode);
               return (
                 <Pressable
                   key={t}
-                  style={({ pressed }) => [
-                    styles.chip,
-                    selecionada && styles.chipSelecionado,
-                    { opacity: pressed ? 0.7 : 1 },
-                  ]}
-                  onPress={() => setTag(t)}
+                  style={({ pressed }) => [styles.chip, styles.chipSelecionado, { opacity: pressed ? 0.7 : 1 }]}
+                  onPress={() => removerTag(t)}
                 >
                   <View style={[styles.chipBolinha, { backgroundColor: cor.base }]} />
-                  <Text style={[styles.chipTexto, selecionada && styles.chipTextoSelecionado]}>{t}</Text>
+                  <Text style={[styles.chipTexto, styles.chipTextoSelecionado]}>{t}</Text>
+                  <Feather name="x" size={11} color={theme.colors.textPrimary} />
                 </Pressable>
               );
             })}
+          </View>
+        )}
+
+        <View style={styles.linhaAdicionarTag}>
+          <TextInput
+            style={[
+              styles.input,
+              styles.inputAdicionarTag,
+              campoFocado === 'novaTag' && styles.inputFocado,
+            ]}
+            placeholder="Ex: Universidade"
+            placeholderTextColor={theme.colors.textMuted}
+            value={novaTagTexto}
+            onChangeText={setNovaTagTexto}
+            onFocus={() => setCampoFocado('novaTag')}
+            onBlur={() => setCampoFocado(null)}
+            onSubmitEditing={handleAdicionarNovaTag}
+            returnKeyType="done"
+          />
+          <Pressable
+            style={({ pressed }) => [styles.botaoAdicionarTag, { opacity: pressed ? 0.7 : 1 }]}
+            onPress={handleAdicionarNovaTag}
+            hitSlop={8}
+          >
+            <Feather name="plus" size={18} color={theme.colors.accentText} />
+          </Pressable>
+        </View>
+
+        {/* Autocomplete de tags já usadas antes — multi-select: tocar
+            alterna a seleção (marca/desmarca), em vez de substituir a
+            escolha anterior como era no campo de tag única. Tags que já
+            estão em `tagsSelecionadas` não aparecem duplicadas aqui de
+            novo (já têm seu chip removível acima). */}
+        {tagsExistentes.filter((t) => !tagJaSelecionada(t)).length > 0 && (
+          <View style={styles.chipsRow}>
+            {tagsExistentes
+              .filter((t) => !tagJaSelecionada(t))
+              .map((t) => {
+                const cor = corDaTag(coresPorTag[t.trim().toLowerCase()] ?? 0, theme.mode);
+                return (
+                  <Pressable
+                    key={t}
+                    style={({ pressed }) => [styles.chip, { opacity: pressed ? 0.7 : 1 }]}
+                    onPress={() => alternarTagExistente(t)}
+                  >
+                    <View style={[styles.chipBolinha, { backgroundColor: cor.base }]} />
+                    <Text style={styles.chipTexto}>{t}</Text>
+                  </Pressable>
+                );
+              })}
           </View>
         )}
 
@@ -365,37 +713,49 @@ export default function ConfirmScreen({ navigation, route }: Props) {
   );
 }
 
-function formatarData(data?: Date): string {
-  if (!data) return '';
-  const dd = String(data.getDate()).padStart(2, '0');
-  const mm = String(data.getMonth() + 1).padStart(2, '0');
-  return `${dd}/${mm}/${data.getFullYear()}`;
-}
+// MUDANÇA (item 3): formatarData/formatarHora/combinarDataEHora/combinarComHora/
+// abrirDatePicker/abrirTimePicker migraram pra src/utils/dataHora.ts —
+// ConfirmMultiplosScreen.tsx precisa do mesmo padrão de picker e duplicar
+// aqui ia divergir com o tempo. Ver import no topo do arquivo.
 
-function formatarHora(data?: Date): string {
-  if (!data) return '';
-  const hh = String(data.getHours()).padStart(2, '0');
-  const min = String(data.getMinutes()).padStart(2, '0');
-  return `${hh}:${min}`;
-}
+// MUDANÇA (item 1): opções fixas dos dois seletores de chip. Vivem fora do
+// componente porque são constantes — não dependem de estado nem de props,
+// só do texto exibido em cada chip.
+const OPCOES_DURACAO: { valor: '30' | '60' | '120' | 'diaInteiro' | 'personalizado'; label: string }[] = [
+  { valor: '30', label: '30 min' },
+  { valor: '60', label: '1h' },
+  { valor: '120', label: '2h' },
+  { valor: 'diaInteiro', label: 'Dia inteiro' },
+  { valor: 'personalizado', label: 'Personalizado' },
+];
 
-function montarData(dataStr: string, horaStr: string): Date | null {
-  const matchData = dataStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (!matchData) return null;
-  const [, dia, mes, ano] = matchData;
+const OPCOES_ANTECEDENCIA: { valor: '10' | '30' | '60' | '1440' | 'sem'; label: string }[] = [
+  { valor: '10', label: '10 min' },
+  { valor: '30', label: '30 min' },
+  { valor: '60', label: '1h' },
+  { valor: '1440', label: '1 dia' },
+  { valor: 'sem', label: 'Sem alarme' },
+];
 
-  const data = new Date(Number(ano), Number(mes) - 1, Number(dia));
+// MUDANÇA (item 2): opções do seletor de recorrência.
+const OPCOES_RECORRENCIA: { valor: 'nenhuma' | 'diaria' | 'semanal' | 'mensal'; label: string }[] = [
+  { valor: 'nenhuma', label: 'Não repete' },
+  { valor: 'diaria', label: 'Todo dia' },
+  { valor: 'semanal', label: 'Toda semana' },
+  { valor: 'mensal', label: 'Todo mês' },
+];
 
-  const matchHora = horaStr.match(/(\d{1,2}):(\d{2})/);
-  if (matchHora) {
-    const [, hora, minuto] = matchHora;
-    data.setHours(Number(hora), Number(minuto), 0, 0);
-  } else {
-    data.setHours(8, 0, 0, 0);
-  }
-
-  return data;
-}
+// Usado só pra montar a dica de texto abaixo do seletor de recorrência
+// ("Repete toda quinta..."), a partir de Date.getDay() (0 = domingo).
+const NOMES_DIA_SEMANA_EXTENSO = [
+  'domingo',
+  'segunda',
+  'terça',
+  'quarta',
+  'quinta',
+  'sexta',
+  'sábado',
+];
 
 function criarStyles(theme: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
@@ -419,6 +779,25 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       borderColor: theme.colors.accent,
       borderWidth: 1.5,
     },
+    // MUDANÇA (item 9.1): campos de data/hora agora são Pressable (abrem o
+    // picker nativo), não mais TextInput — reaproveita a base visual de
+    // `input` (mesma borda/fundo/padding) mas em row, com o texto formatado
+    // de um lado e um chevron do outro indicando que é tocável.
+    inputPressable: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    inputPressableTexto: { ...theme.typography.body, color: theme.colors.textPrimary },
+    limparLink: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      alignSelf: 'flex-start',
+      marginTop: -theme.spacing.xs,
+      marginBottom: theme.spacing.md,
+    },
+    limparLinkTexto: { ...theme.typography.caption, color: theme.colors.accent },
     textarea: { minHeight: 64, textAlignVertical: 'top' },
     linhaDupla: { flexDirection: 'row', gap: theme.spacing.sm },
     inputMetade: { flex: 1 },
@@ -444,6 +823,20 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       marginBottom: theme.spacing.md,
     },
     chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.xs + 2, marginBottom: theme.spacing.lg },
+    // MUDANÇA (item 4): campo de criar tag nova + botão "+", lado a lado —
+    // reaproveita a base visual de `input`, mas em row com o botão de
+    // largura fixa ao lado (mesmo padrão de `inputPressable`, só que aqui
+    // o segundo elemento é um botão separado, não parte do mesmo Pressable).
+    linhaAdicionarTag: { flexDirection: 'row', gap: theme.spacing.sm, alignItems: 'flex-start' },
+    inputAdicionarTag: { flex: 1, marginBottom: theme.spacing.md },
+    botaoAdicionarTag: {
+      width: 48,
+      height: 48,
+      borderRadius: theme.radius.md,
+      backgroundColor: theme.colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     chip: {
       flexDirection: 'row',
       alignItems: 'center',
