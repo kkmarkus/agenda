@@ -7,6 +7,12 @@
 // 10 ao dia 20", "de 10 a 15 de agosto"), e horário em "Xh", "X:XX" ou
 // "X horas".
 
+// MUDANÇA (item 2): o tipo `Recorrencia` mora em types/event.ts (não aqui)
+// porque é compartilhado entre o resultado do parser (`EventoExtraido`,
+// abaixo) e o que a tela de confirmação monta pra salvar (`NovoEvento`) —
+// ver comentário completo lá.
+import type { Recorrencia } from '../types/event';
+
 export interface EventoExtraido {
   titulo: string;
   data: Date | null;
@@ -18,6 +24,12 @@ export interface EventoExtraido {
   // uma barra visual de "evento de vários dias").
   dataFim: Date | null;
   horaEncontrada: boolean; // se não achou hora, o formulário assume um horário padrão
+  // MUDANÇA (item 2): null explícito (não undefined) — "não detectei
+  // recorrência nenhuma" é um resultado tão válido quanto detectar uma,
+  // e a tela de confirmação distingue os dois só pra decidir o valor
+  // inicial do seletor, nunca pra esconder o seletor (ele aparece sempre,
+  // editável manualmente mesmo sem detecção — ver ConfirmScreen).
+  recorrencia: Recorrencia | null;
 }
 
 // CORREÇÃO IMPORTANTE (já existia): o parser original usava \b (word boundary)
@@ -217,6 +229,34 @@ const REGEX_HORA_CURTA = /(\d{1,2})[:h](\d{2})?\s*h?/i;
 // Horário por extenso: "17 horas", "17 horas e 30 minutos"
 const REGEX_HORA_EXTENSO = /(\d{1,2})\s*horas?(?:\s+e\s+(\d{1,2})\s*minutos?)?/i;
 
+// --- Recorrência (item 2) ---
+// Ordem de checagem importa (ver extrairRecorrencia): do mais específico
+// pro mais genérico, senão um padrão genérico "ganha" antes de um mais
+// específico ser considerado (mesmo cuidado já usado nos padrões de data).
+
+// "todo dia 5", "todo dia 15" — mensal com dia explícito. Precisa ser
+// checado ANTES do padrão diário genérico ("todo dia" sem número), senão
+// esse casaria primeiro e o número "5" sobraria solto no título.
+const REGEX_RECORRENCIA_MENSAL_DIA = /todo\s+dia\s+(\d{1,2})(?!\s*[/\d])/i;
+
+// "toda terça", "todo sábado", "todas as segundas" — semanal com dia
+// explícito. Aceita "todo"/"toda"/"todos"/"todas" na frente porque a
+// concordância de gênero varia conforme o dia (masc: domingo, sábado;
+// fem: os demais) e não vale a pena validar isso — sobrar "s" solto não
+// atrapalha, já que o trecho inteiro do match é removido do título.
+const REGEX_RECORRENCIA_SEMANAL_DIA = new RegExp(
+  `todo[sa]?s?\\s+(?:as\\s+)?(${DIAS_SEMANA_PADRAO})(-feira)?(?![a-zA-ZÀ-ÿ])`,
+  'i'
+);
+
+const REGEX_RECORRENCIA_DIARIAMENTE = comLimitesDePalavra('diariamente');
+const REGEX_RECORRENCIA_MENSAL_GENERICO = /todo\s+m[eê]s/i;
+const REGEX_RECORRENCIA_SEMANAL_GENERICO = /toda\s+semana/i;
+// "todo dia" sem número atrás — checado por ÚLTIMO entre os padrões de
+// recorrência: só sobra pra essa regra o que não casou com nenhum padrão
+// mais específico acima (em especial REGEX_RECORRENCIA_MENSAL_DIA).
+const REGEX_RECORRENCIA_DIARIA_GENERICA = /(?<![a-zA-ZÀ-ÿ])todo\s+dia(?![a-zA-ZÀ-ÿ0-9])/i;
+
 /** Próxima data (a partir de hoje, inclusive) em que cai o dia da semana informado. */
 function proximaOcorrencia(agora: Date, diaAlvo: number): Date {
   const data = new Date(agora);
@@ -224,6 +264,82 @@ function proximaOcorrencia(agora: Date, diaAlvo: number): Date {
   const diferenca = (diaAlvo - diaAtual + 7) % 7;
   data.setDate(data.getDate() + diferenca);
   return data;
+}
+
+/** Próxima data (a partir de hoje, inclusive) em que cai o dia do mês informado. */
+function proximaOcorrenciaDoDiaDoMes(agora: Date, dia: number): Date {
+  const candidato = new Date(agora.getFullYear(), agora.getMonth(), dia);
+  const hojeSemHora = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate());
+  if (candidato.getTime() < hojeSemHora.getTime()) {
+    candidato.setMonth(candidato.getMonth() + 1);
+  }
+  return candidato;
+}
+
+/**
+ * Reconhece padrões de recorrência ("toda terça", "todo dia 5", "todo mês",
+ * "toda semana", "diariamente") e já resolve a data da PRIMEIRA ocorrência,
+ * pra servir de base pro evento que será criado com `recurrenceRule` (ver
+ * calendarService.ts). Não define data de término — ver comentário na
+ * função que monta o recurrenceRule sobre por quê fica indefinida por
+ * padrão.
+ */
+function extrairRecorrencia(
+  texto: string,
+  agora: Date
+): { recorrencia: Recorrencia; trecho: string; dataBase: Date } | null {
+  const mensalDia = texto.match(REGEX_RECORRENCIA_MENSAL_DIA);
+  if (mensalDia) {
+    const dia = Number(mensalDia[1]);
+    return {
+      recorrencia: { frequencia: 'mensal', diaDoMes: dia },
+      trecho: mensalDia[0],
+      dataBase: proximaOcorrenciaDoDiaDoMes(agora, dia),
+    };
+  }
+
+  const semanalDia = texto.match(REGEX_RECORRENCIA_SEMANAL_DIA);
+  if (semanalDia) {
+    const chaveDia = removerAcentos(semanalDia[1].toLowerCase());
+    const diaAlvo = NOMES_DIAS_SEMANA[chaveDia];
+    if (diaAlvo !== undefined) {
+      return {
+        recorrencia: { frequencia: 'semanal', diaSemana: diaAlvo },
+        trecho: semanalDia[0],
+        dataBase: proximaOcorrencia(agora, diaAlvo),
+      };
+    }
+  }
+
+  const diariamente = texto.match(REGEX_RECORRENCIA_DIARIAMENTE);
+  if (diariamente) {
+    return { recorrencia: { frequencia: 'diaria' }, trecho: diariamente[0], dataBase: new Date(agora) };
+  }
+
+  const mensalGenerico = texto.match(REGEX_RECORRENCIA_MENSAL_GENERICO);
+  if (mensalGenerico) {
+    return {
+      recorrencia: { frequencia: 'mensal', diaDoMes: agora.getDate() },
+      trecho: mensalGenerico[0],
+      dataBase: new Date(agora),
+    };
+  }
+
+  const semanalGenerico = texto.match(REGEX_RECORRENCIA_SEMANAL_GENERICO);
+  if (semanalGenerico) {
+    return {
+      recorrencia: { frequencia: 'semanal', diaSemana: agora.getDay() },
+      trecho: semanalGenerico[0],
+      dataBase: new Date(agora),
+    };
+  }
+
+  const diariaGenerica = texto.match(REGEX_RECORRENCIA_DIARIA_GENERICA);
+  if (diariaGenerica) {
+    return { recorrencia: { frequencia: 'diaria' }, trecho: diariaGenerica[0], dataBase: new Date(agora) };
+  }
+
+  return null;
 }
 
 function extrairData(texto: string, agora: Date): { data: Date | null; trecho: string | null } {
@@ -394,6 +510,41 @@ export function parseTextoLivre(texto: string, agora: Date = new Date()): Evento
       data: inicio,
       dataFim: fim,
       horaEncontrada: !!horaInfo,
+      recorrencia: null,
+    };
+  }
+
+  // MUDANÇA (item 2): recorrência é checada ANTES da extração de data
+  // única. Um texto como "academia toda terça" não pode cair na regra de
+  // dia da semana isolado (REGEX_DIA_SEMANA, dentro de extrairData) — ela
+  // casaria só "terça" e deixaria "toda" sobrando feio no título, além de
+  // perder a informação de repetição inteiramente. "terça que vem"
+  // continua caindo na regra de data única normalmente: nenhum padrão de
+  // recorrência reconhece "que vem" sozinho, só "todo"/"toda" na frente —
+  // não há conflito entre as duas leituras.
+  const recorrenciaInfo = extrairRecorrencia(texto, agora);
+  if (recorrenciaInfo) {
+    let dataFinal = recorrenciaInfo.dataBase;
+    if (horaInfo) {
+      dataFinal = new Date(dataFinal);
+      dataFinal.setHours(horaInfo.hora, horaInfo.minuto, 0, 0);
+    } else {
+      dataFinal.setHours(8, 0, 0, 0);
+    }
+
+    let titulo = texto.replace(recorrenciaInfo.trecho, '');
+    if (horaInfo) titulo = titulo.replace(horaInfo.trecho, '');
+    titulo = titulo
+      .replace(REGEX_PALAVRAS_DESCARTAVEIS, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    return {
+      titulo: titulo || texto.trim(),
+      data: dataFinal,
+      dataFim: null,
+      horaEncontrada: !!horaInfo,
+      recorrencia: recorrenciaInfo.recorrencia,
     };
   }
 
@@ -420,5 +571,97 @@ export function parseTextoLivre(texto: string, agora: Date = new Date()): Evento
     data: dataFinal,
     dataFim: null,
     horaEncontrada: !!horaInfo,
+    recorrencia: null,
   };
+}
+
+// --- Múltiplos eventos por texto (item 3) ---
+
+// Marcador de item de lista no INÍCIO da linha: "-", "•", "*", "1.", "1)".
+// Só remove o marcador em si — o resto da linha (o texto do compromisso)
+// fica intacto pra ser processado por parseTextoLivre normalmente.
+const REGEX_MARCADOR_LISTA = /^\s*(?:[-•*]|\d+[.)])\s*/;
+
+// Combinado só pra ACHAR onde uma data começa no texto corrido (fallback
+// best-effort quando não há marcador de lista nenhum) — não extrai valor
+// nenhum daqui, só a posição. A extração de verdade continua sendo feita
+// depois, trecho por trecho, por parseTextoLivre (que já sabe interpretar
+// cada um desses padrões corretamente). Deliberadamente não inclui TODOS
+// os padrões que extrairData reconhece (ex: "semana que vem" sozinho,
+// "daqui a X dias") — cobre os marcadores mais comuns em avisos colados
+// (data numérica, "hoje/amanhã", data por extenso, dia da semana); é uma
+// rede de segurança, não uma segunda implementação completa do parser.
+const REGEX_MARCADOR_DATA_GLOBAL = new RegExp(
+  [
+    '\\d{1,2}/\\d{1,2}(?:/\\d{4})?', // dd/mm ou dd/mm/aaaa
+    '(?<![a-zA-ZÀ-ÿ])depois de amanh[ãa](?![a-zA-ZÀ-ÿ])',
+    '(?<![a-zA-ZÀ-ÿ])amanh[ãa](?![a-zA-ZÀ-ÿ])',
+    '(?<![a-zA-ZÀ-ÿ])hoje(?![a-zA-ZÀ-ÿ])',
+    '\\d{1,2}\\s+de\\s+[a-zA-ZÀ-ÿ]+', // "4 de agosto"
+    `(?<![a-zA-ZÀ-ÿ])(?:pr[oó]xim[oa]\\s+)?(?:${DIAS_SEMANA_PADRAO})(?:-feira)?(?![a-zA-ZÀ-ÿ])`,
+  ].join('|'),
+  'gi'
+);
+
+/**
+ * Fallback best-effort: sem marcador de lista reconhecível, divide o texto
+ * corrido pela posição de cada data solta encontrada. Cada trecho começa
+ * no marcador anterior (ou no início do texto pro primeiro), pra não
+ * perder palavras do título que vêm ANTES da data no mesmo compromisso
+ * (ex: "reunião 20/07" — "reunião" precisa ficar junto de "20/07", não
+ * virar um trecho vazio separado). Com 0 ou 1 marcador encontrado, não há
+ * o que dividir — devolve o texto inteiro como um candidato único.
+ */
+function dividirPorPosicaoDeDatas(texto: string): string[] {
+  const indices: number[] = [];
+  const regex = new RegExp(REGEX_MARCADOR_DATA_GLOBAL.source, 'gi');
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(texto)) !== null) {
+    indices.push(match.index);
+    if (match.index === regex.lastIndex) regex.lastIndex += 1; // evita loop infinito em match de tamanho zero
+  }
+
+  if (indices.length <= 1) return [texto];
+
+  const pontosDeCorte = [0, ...indices.slice(1)];
+  return pontosDeCorte.map((inicio, i) => {
+    const fim = i + 1 < pontosDeCorte.length ? pontosDeCorte[i + 1] : texto.length;
+    return texto.slice(inicio, fim).trim();
+  });
+}
+
+/**
+ * Extrai VÁRIOS eventos de um único texto — o caso comum de colar um aviso
+ * de grupo com uma lista de compromissos, em vez de um texto só sobre um
+ * evento (que continua indo por `parseTextoLivre`, usado aqui internamente
+ * pra cada trecho já isolado).
+ *
+ * Estratégia, em ordem de preferência:
+ * 1. Se o texto tem mais de uma linha reconhecível (quebra de linha e/ou
+ *    marcador de lista tipo "-"/"•"/"1."), cada linha vira um candidato.
+ * 2. Sem isso, cai no fallback best-effort de `dividirPorPosicaoDeDatas`.
+ *
+ * Trechos sem NENHUMA data reconhecida (`data` e `dataFim` ambos null)
+ * são descartados — não são um compromisso separado, provavelmente é uma
+ * segunda linha de detalhe do trecho anterior (ex: um endereço, uma
+ * observação) que não faz sentido virar um evento próprio sem data.
+ */
+export function parseMultiplosEventos(texto: string, agora: Date = new Date()): EventoExtraido[] {
+  const linhas = texto
+    .split('\n')
+    .map((linha) => linha.replace(REGEX_MARCADOR_LISTA, '').trim())
+    .filter((linha) => linha.length > 0);
+
+  const candidatos = linhas.length > 1 ? linhas : dividirPorPosicaoDeDatas(texto.trim());
+
+  const eventos: EventoExtraido[] = [];
+  candidatos.forEach((candidato) => {
+    if (!candidato) return;
+    const extraido = parseTextoLivre(candidato, agora);
+    if (extraido.data || extraido.dataFim) {
+      eventos.push(extraido);
+    }
+  });
+
+  return eventos;
 }
