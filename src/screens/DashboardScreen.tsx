@@ -1,5 +1,5 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, ScrollView, StyleSheet } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { View, Text, FlatList, Pressable, ScrollView, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -14,6 +14,7 @@ import {
   listarCalendariosSincronizadosAtivos,
   listarNativeIdsRegistrados,
   salvarRegistro,
+  alternarFixado,
   SEM_TAG_LABEL,
 } from '../services/database';
 import { EventoApp } from '../types/event';
@@ -46,7 +47,11 @@ const MESES_ABREV = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'se
 
 export default function DashboardScreen({ navigation }: Props) {
   const theme = useTheme();
-  const styles = criarStyles(theme);
+  // CORREÇÃO (performance): `criarStyles` monta um StyleSheet novo a cada
+  // render — nesta tela em particular isso rodava a cada tecla digitada na
+  // busca, cada troca de aba de tag etc. `useMemo` faz recalcular só
+  // quando o tema muda de verdade.
+  const styles = useMemo(() => criarStyles(theme), [theme]);
 
   const [eventos, setEventos] = useState<EventoApp[]>([]);
   const [tagsDisponiveis, setTagsDisponiveis] = useState<string[]>([]);
@@ -54,6 +59,16 @@ export default function DashboardScreen({ navigation }: Props) {
   const [carregando, setCarregando] = useState(true);
   const [coresPorTag, setCoresPorTag] = useState<Record<string, number>>({});
   const [menuAberto, setMenuAberto] = useState(false);
+  // CORREÇÃO (performance): função estável (não recriada a cada render) —
+  // sem isso, o `React.memo` aplicado em SettingsDrawer não teria efeito
+  // nenhum, já que uma prop de função nova a cada render sempre "muda"
+  // pro React, forçando o SettingsDrawer a rerenderizar de qualquer jeito.
+  const fecharMenu = useCallback(() => setMenuAberto(false), []);
+  // MUDANÇA (9.5): busca por texto, filtrando por título — convive com o
+  // filtro de tag (abas) já existente, sem substituí-lo. Os dois se
+  // combinam por E lógico: uma tag ativa + um texto de busca mostram só o
+  // que casa com AMBOS.
+  const [busca, setBusca] = useState('');
 
   // Cada linha da lista tem seu próprio Swipeable; guardamos as refs pra
   // poder fechar as outras quando uma nova é aberta (senão várias linhas
@@ -96,7 +111,7 @@ export default function DashboardScreen({ navigation }: Props) {
 
       for (const evento of eventosExternos) {
         if (!jaRegistrados.has(evento.nativeEventId)) {
-          salvarRegistro(evento.nativeEventId, null);
+          salvarRegistro(evento.nativeEventId, []);
         }
       }
     } catch {
@@ -109,45 +124,88 @@ export default function DashboardScreen({ navigation }: Props) {
   async function carregarEventos() {
     setCarregando(true);
     const registros = listarRegistros();
+
+    // MUDANÇA (9.3): antes era um for...of sequencial (uma chamada de
+    // buscarEventoDaAgenda esperava a anterior terminar antes de começar a
+    // próxima) — com N eventos, o tempo total crescia linearmente com N.
+    // Promise.all dispara todas as buscas de uma vez; o tempo total passa a
+    // ser só o da busca mais lenta, não a soma de todas.
+    const resultados = await Promise.all(
+      registros.map(async (registro) => {
+        const dadosNativos = await buscarEventoDaAgenda(registro.nativeEventId);
+        return { registro, dadosNativos };
+      })
+    );
+
     const resultado: EventoApp[] = [];
+    const registrosOrfaos: number[] = [];
 
-    for (const registro of registros) {
-      const dadosNativos = await buscarEventoDaAgenda(registro.nativeEventId);
-
+    resultados.forEach(({ registro, dadosNativos }) => {
       if (!dadosNativos) {
         // Evento sumiu da agenda nativa (ela apagou direto no Google Calendar):
-        // limpamos o registro órfão pra não aparecer de novo na próxima carga.
-        apagarRegistro(registro.id);
-        continue;
+        // marcamos o registro órfão pra limpar depois do loop — apagar
+        // durante o forEach misturaria escrita e leitura no meio da
+        // montagem do array, sem ganho nenhum (as buscas já rodaram todas
+        // em paralelo antes disso).
+        registrosOrfaos.push(registro.id);
+        return;
       }
 
       resultado.push({
         id: registro.id,
         nativeEventId: registro.nativeEventId,
-        tag: registro.tag,
+        tags: registro.tags,
         titulo: dadosNativos.titulo,
         data: dadosNativos.data,
         descricao: dadosNativos.descricao,
+        recorrente: dadosNativos.recorrente,
+        recorrencia: dadosNativos.recorrencia,
+        fixado: registro.fixado,
       });
-    }
+    });
 
+    registrosOrfaos.forEach((id) => apagarRegistro(id));
+
+    // MUDANÇA (item 5): fixados sempre primeiro (ordenados entre si por
+    // data, igual antes), depois o resto na ordem de sempre (proximidade).
+    // `sort` é estável no engine JS usado pelo React Native (V8/Hermes),
+    // então basta comparar o fixado — quem empata em fixado mantém a ordem
+    // relativa da comparação por data que já rodou antes.
     resultado.sort((a, b) => a.data.getTime() - b.data.getTime());
+    resultado.sort((a, b) => Number(b.fixado) - Number(a.fixado));
     setEventos(resultado);
     setTagsDisponiveis(listarTagsUnicas());
     setCoresPorTag(listarCoresDeTags());
     setCarregando(false);
   }
 
-  function handleEditar(evento: EventoApp) {
+  // MUDANÇA (item 2): navega pra edição de fato — extraído do antigo
+  // handleEditar pra poder ser chamado tanto direto (evento comum) quanto
+  // depois de ela escolher o escopo (evento recorrente).
+  function navegarParaEdicao(evento: EventoApp, ocorrencia?: { instanceStartDate: Date; futureEvents: boolean }) {
     navigation.navigate('Confirmar', {
       nativeEventId: evento.nativeEventId,
       rascunho: {
         titulo: evento.titulo,
         data: evento.data,
         descricao: evento.descricao,
-        tag: evento.tag,
+        tags: evento.tags,
+        recorrencia: evento.recorrencia,
       },
+      ocorrencia,
     });
+  }
+
+  // Evento recorrente aguardando ela escolher "Somente este" ou "Este e os
+  // futuros" antes de abrir a tela de edição.
+  const [eventoParaEscolherEscopoEdicao, setEventoParaEscolherEscopoEdicao] = useState<EventoApp | null>(null);
+
+  function handleEditar(evento: EventoApp) {
+    if (evento.recorrente) {
+      setEventoParaEscolherEscopoEdicao(evento);
+      return;
+    }
+    navegarParaEdicao(evento);
   }
 
   // Estado do evento aguardando confirmação de exclusão — substitui o
@@ -160,29 +218,101 @@ export default function DashboardScreen({ navigation }: Props) {
     setEventoParaApagar(evento);
   }
 
-  async function confirmarApagar() {
+  // MUDANÇA (item 5): fixar/desafixar não precisa de confirmação (ação
+  // reversível e barata, diferente de apagar) — alterna e recarrega direto.
+  function handleAlternarFixado(evento: EventoApp) {
+    swipeableRefs.current[evento.id]?.close();
+    alternarFixado(evento.id);
+    carregarEventos();
+  }
+
+  async function confirmarApagar(futureEvents?: boolean) {
     if (!eventoParaApagar) return;
+    // MUDANÇA (item 2): evento recorrente precisa dizer ao expo-calendar
+    // A PARTIR DE QUAL ocorrência apagar — usamos a própria data carregada
+    // do evento (o `data` do EventoApp É o início dessa ocorrência
+    // específica), não uma data-base da série.
+    const opcoesOcorrencia =
+      eventoParaApagar.recorrente && futureEvents !== undefined
+        ? { instanceStartDate: eventoParaApagar.data, futureEvents }
+        : undefined;
     // Sincronizado: apaga dos dois lados, senão o alarme nativo continua
-    // ativo pra um evento que sumiu do app.
-    await apagarEventoDaAgenda(eventoParaApagar.nativeEventId);
-    apagarRegistro(eventoParaApagar.id);
+    // ativo pra um evento que sumiu do app. Exceção: evento recorrente
+    // ("Somente este" ou "Este e os futuros") NÃO apaga o registro local
+    // aqui — o registro (native_event_id + tag) representa a SÉRIE
+    // inteira, e outras ocorrências dela podem continuar existindo. Se a
+    // série inteira tiver mesmo sumido, a próxima carga do Dashboard já
+    // detecta isso sozinha (buscarEventoDaAgenda retorna null) e limpa o
+    // registro órfão — mesmo mecanismo que já existe pra quando ela apaga
+    // um evento direto no Google Calendar.
+    await apagarEventoDaAgenda(eventoParaApagar.nativeEventId, opcoesOcorrencia);
+    if (!opcoesOcorrencia) {
+      apagarRegistro(eventoParaApagar.id);
+    }
     setEventoParaApagar(null);
     carregarEventos();
   }
 
-  const temEventosSemTag = eventos.some((e) => !e.tag);
+  // MUDANÇA (item 6): estado do diálogo de limpeza em lote — separado de
+  // `eventoParaApagar` porque não se refere a um evento específico.
+  const [confirmandoLimpezaPassados, setConfirmandoLimpezaPassados] = useState(false);
+
+  /**
+   * Apaga uma lista de eventos (agenda nativa + registro local) — usada
+   * tanto pela limpeza em lote (item 6) quanto, no fundo, pelo mesmo
+   * caminho que `confirmarApagar` já percorre pra um evento só, reaproveitado
+   * aqui em vez de duplicar o loop de apagar+desregistrar.
+   */
+  async function apagarListaDeEventos(lista: EventoApp[]) {
+    for (const evento of lista) {
+      await apagarEventoDaAgenda(evento.nativeEventId);
+      apagarRegistro(evento.id);
+    }
+  }
+
+  async function confirmarLimpezaPassados(incluirFixados: boolean) {
+    const alvos = incluirFixados ? eventosPassados : eventosPassadosNaoFixados;
+    await apagarListaDeEventos(alvos);
+    setConfirmandoLimpezaPassados(false);
+    carregarEventos();
+  }
+
+
+  const temEventosSemTag = eventos.some((e) => e.tags.length === 0);
 
   // tagAtiva: null = "Todas", '' = "Sem tag" (sentinel — tags de verdade
-  // nunca são string vazia, já que ConfirmScreen converte "" em null antes
-  // de salvar), qualquer outra string = tag específica.
-  const eventosFiltrados =
+  // nunca são string vazia), qualquer outra string = tag específica.
+  // MUDANÇA (item 4): com múltiplas tags por evento, o filtro passa a
+  // checar se a tag ativa está ENTRE as tags do evento (some), não se é a
+  // única tag dele (comparação de igualdade direta, que só fazia sentido
+  // quando cada evento tinha no máximo uma).
+  const eventosFiltradosPorTag =
     tagAtiva === null
       ? eventos
       : tagAtiva === ''
-      ? eventos.filter((e) => !e.tag)
-      : eventos.filter((e) => e.tag?.toLowerCase() === tagAtiva.toLowerCase());
+      ? eventos.filter((e) => e.tags.length === 0)
+      : eventos.filter((e) => e.tags.some((t) => t.toLowerCase() === tagAtiva.toLowerCase()));
+
+  // MUDANÇA (9.5): aplicado por cima do filtro de tag, não no lugar dele —
+  // buscar "reunião" com a aba "Trabalho" ativa mostra só reuniões
+  // marcadas como Trabalho, não todas as reuniões do app inteiro.
+  const buscaNormalizada = busca.trim().toLowerCase();
+  const eventosFiltrados = buscaNormalizada
+    ? eventosFiltradosPorTag.filter((e) => e.titulo.toLowerCase().includes(buscaNormalizada))
+    : eventosFiltradosPorTag;
 
   const agora = new Date();
+
+  // MUDANÇA (item 6): candidatos à limpeza em lote. Eventos recorrentes
+  // ficam de fora — o `data` carregado é só a ocorrência mais recente que
+  // a agenda nativa devolveu pra esse native_event_id, e apagar o evento
+  // inteiro (sem instanceStartDate) apagaria a SÉRIE toda, futuras
+  // ocorrências inclusive, o que não é o que "limpar o que já passou"
+  // deveria fazer. Editar/excluir ocorrências específicas de uma série já
+  // tem seu próprio fluxo (item 2, direto no card).
+  const eventosPassados = eventos.filter((e) => e.data.getTime() < agora.getTime() && !e.recorrente);
+  const eventosPassadosNaoFixados = eventosPassados.filter((e) => !e.fixado);
+  const eventosPassadosFixados = eventosPassados.filter((e) => e.fixado);
 
   // Contagem de urgentes pra badge do cabeçalho — pequeno toque de
   // "dashboard de verdade" em vez de só uma lista.
@@ -215,7 +345,7 @@ export default function DashboardScreen({ navigation }: Props) {
         </View>
       </View>
 
-      <SettingsDrawer visivel={menuAberto} onFechar={() => setMenuAberto(false)} navigation={navigation} />
+      <SettingsDrawer visivel={menuAberto} onFechar={fecharMenu} />
 
       {!carregando && eventos.length > 0 && (
         <View style={styles.resumoRow}>
@@ -232,6 +362,25 @@ export default function DashboardScreen({ navigation }: Props) {
             </Text>
             <Text style={styles.resumoLabel}>PRÓXIMOS 48H</Text>
           </View>
+        </View>
+      )}
+
+      {!carregando && eventos.length > 0 && (
+        <View style={styles.buscaRow}>
+          <Feather name="search" size={15} color={theme.colors.textMuted} />
+          <TextInput
+            style={styles.buscaInput}
+            placeholder="Buscar por título"
+            placeholderTextColor={theme.colors.textMuted}
+            value={busca}
+            onChangeText={setBusca}
+            returnKeyType="search"
+          />
+          {busca.length > 0 && (
+            <Pressable onPress={() => setBusca('')} hitSlop={8}>
+              <Feather name="x" size={15} color={theme.colors.textMuted} />
+            </Pressable>
+          )}
         </View>
       )}
 
@@ -262,6 +411,18 @@ export default function DashboardScreen({ navigation }: Props) {
         </ScrollView>
       )}
 
+      {eventosPassados.length > 0 && (
+        <Pressable
+          style={({ pressed }) => [styles.linkLimparPassados, { opacity: pressed ? 0.6 : 1 }]}
+          onPress={() => setConfirmandoLimpezaPassados(true)}
+        >
+          <Feather name="trash-2" size={13} color={theme.colors.textMuted} />
+          <Text style={styles.linkLimparPassadosTexto}>
+            Limpar eventos passados ({eventosPassadosNaoFixados.length})
+          </Text>
+        </Pressable>
+      )}
+
       {carregando && eventos.length === 0 ? (
         <View>
           <SkeletonBlock style={styles.skeletonCard} />
@@ -283,7 +444,9 @@ export default function DashboardScreen({ navigation }: Props) {
                   <Feather name="calendar" size={22} color={theme.colors.textMuted} />
                 </View>
                 <Text style={styles.vazio}>
-                  {tagAtiva === ''
+                  {buscaNormalizada
+                    ? `Nenhum evento com "${busca.trim()}" no título.`
+                    : tagAtiva === ''
                     ? 'Nenhum evento sem tag.'
                     : tagAtiva
                     ? `Nenhum evento com a tag "${tagAtiva}".`
@@ -295,14 +458,26 @@ export default function DashboardScreen({ navigation }: Props) {
           renderItem={({ item }) => {
             const horasRestantes = (item.data.getTime() - Date.now()) / (1000 * 60 * 60);
             const urgente = horasRestantes >= 0 && horasRestantes <= LIMITE_URGENTE_HORAS;
-            // Evento sem tag: nada pra colorir de verdade — usa o tom
-            // neutro (textMuted) tanto no traço lateral quanto no pill,
-            // pra não inventar uma "cor de sem-tag" que ela não escolheu.
-            const cor = item.tag
-              ? corDaTag(coresPorTag[item.tag.trim().toLowerCase()] ?? 0, theme.mode)
-              : { base: theme.colors.textMuted, text: theme.colors.textMuted };
 
-            const corAcento = urgente ? theme.colors.urgent : cor.base;
+            // MUDANÇA (item 4): tags exibidas nas pills e no traço lateral,
+            // travadas nas 3 primeiras (na ordem em que foram adicionadas —
+            // ver definirTagsDoEvento em database.ts). Com 4+ tags, as
+            // demais continuam aparecendo só nas pills de texto (ver
+            // "+N" abaixo), sem ganhar segmento próprio no traço.
+            const tagsParaFaixa = item.tags.slice(0, 3);
+            function corDaTagNome(nome: string) {
+              return corDaTag(coresPorTag[nome.trim().toLowerCase()] ?? 0, theme.mode);
+            }
+
+            // Evento urgente sobrepõe a cor de urgência no lugar das cores
+            // de tag (regra que já existia antes do item 4, sem mudança) —
+            // um único segmento sólido, não um por tag, já que a urgência é
+            // uma propriedade do evento, não de cada tag individualmente.
+            const segmentosFaixa: string[] = urgente
+              ? [theme.colors.urgent]
+              : tagsParaFaixa.length > 0
+              ? tagsParaFaixa.map((t) => corDaTagNome(t).base)
+              : [theme.colors.textMuted];
 
             return (
               <Swipeable
@@ -314,19 +489,33 @@ export default function DashboardScreen({ navigation }: Props) {
                 friction={2}
                 onSwipeableWillOpen={() => fecharOutrosSwipes(item.id)}
                 renderRightActions={() => (
-                  <Pressable style={styles.acaoApagar} onPress={() => handleApagar(item)}>
-                    <Feather name="trash-2" size={19} color={theme.colors.urgent} />
-                  </Pressable>
+                  <View style={styles.acoesSwipeRow}>
+                    <Pressable style={styles.acaoFixar} onPress={() => handleAlternarFixado(item)}>
+                      <Feather
+                        name="map-pin"
+                        size={19}
+                        color={item.fixado ? theme.colors.accent : theme.colors.textMuted}
+                      />
+                    </Pressable>
+                    <Pressable style={styles.acaoApagar} onPress={() => handleApagar(item)}>
+                      <Feather name="trash-2" size={19} color={theme.colors.urgent} />
+                    </Pressable>
+                  </View>
                 )}
               >
                 <Pressable
                   style={({ pressed }) => [styles.card, { opacity: pressed ? 0.85 : 1 }]}
                   onPress={() => handleEditar(item)}
                 >
-                  <View style={[styles.faixa, { backgroundColor: corAcento }]} />
+                  <View style={styles.faixa}>
+                    {segmentosFaixa.map((corSegmento, indice) => (
+                      <View key={indice} style={[styles.faixaSegmento, { backgroundColor: corSegmento }]} />
+                    ))}
+                  </View>
                   <View style={styles.cardConteudo}>
                     <View style={{ flex: 1 }}>
                       <View style={styles.cardTituloRow}>
+                        {item.fixado && <Feather name="map-pin" size={12} color={theme.colors.accent} />}
                         {urgente && <Feather name="bell" size={12} color={theme.colors.urgent} />}
                         <Text style={styles.cardTitulo} numberOfLines={1}>{item.titulo}</Text>
                       </View>
@@ -334,12 +523,40 @@ export default function DashboardScreen({ navigation }: Props) {
                         <Text style={[styles.cardData, urgente && styles.cardDataUrgente]}>
                           {formatarDataLegivel(item.data)}
                         </Text>
-                        <View style={[styles.cardTagPill, item.tag && { backgroundColor: cor.base + TAG_WASH_ALPHA }]}>
-                          <View style={[styles.cardTagBolinha, { backgroundColor: cor.base }]} />
-                          <Text style={[styles.cardTagTexto, item.tag && { color: cor.base }]} numberOfLines={1}>
-                            {item.tag ?? SEM_TAG_LABEL}
-                          </Text>
-                        </View>
+                      </View>
+                      {/* MUDANÇA (item 4): pills de tag numa linha própria
+                          (flexWrap), separada da data — com até 3 tags por
+                          evento não cabem mais lado a lado com a data numa
+                          única linha compacta como antes (tag única). */}
+                      <View style={styles.cardTagsRow}>
+                        {item.tags.length === 0 ? (
+                          <View style={styles.cardTagPill}>
+                            <View style={[styles.cardTagBolinha, { backgroundColor: theme.colors.textMuted }]} />
+                            <Text style={styles.cardTagTexto} numberOfLines={1}>{SEM_TAG_LABEL}</Text>
+                          </View>
+                        ) : (
+                          <>
+                            {item.tags.slice(0, 3).map((nomeTag) => {
+                              const corTag = corDaTagNome(nomeTag);
+                              return (
+                                <View
+                                  key={nomeTag}
+                                  style={[styles.cardTagPill, { backgroundColor: corTag.base + TAG_WASH_ALPHA }]}
+                                >
+                                  <View style={[styles.cardTagBolinha, { backgroundColor: corTag.base }]} />
+                                  <Text style={[styles.cardTagTexto, { color: corTag.base }]} numberOfLines={1}>
+                                    {nomeTag}
+                                  </Text>
+                                </View>
+                              );
+                            })}
+                            {item.tags.length > 3 && (
+                              <View style={styles.cardTagPill}>
+                                <Text style={styles.cardTagTexto}>+{item.tags.length - 3}</Text>
+                              </View>
+                            )}
+                          </>
+                        )}
                       </View>
                     </View>
                     <Text style={[styles.cardDias, urgente && styles.cardDiasUrgente]}>
@@ -368,13 +585,71 @@ export default function DashboardScreen({ navigation }: Props) {
       <ConfirmDialog
         visivel={eventoParaApagar !== null}
         titulo="Apagar evento"
-        mensagem={eventoParaApagar ? `Remover "${eventoParaApagar.titulo}" da agenda?` : ''}
+        mensagem={
+          eventoParaApagar
+            ? eventoParaApagar.recorrente
+              ? `"${eventoParaApagar.titulo}" se repete. O que você quer apagar?`
+              : `Remover "${eventoParaApagar.titulo}" da agenda?`
+            : ''
+        }
+        icone="trash-2"
+        textoCancelar="Cancelar"
+        textoConfirmar={eventoParaApagar?.recorrente ? 'Este e os futuros' : 'Apagar'}
+        textoAcaoExtra={eventoParaApagar?.recorrente ? 'Somente este evento' : undefined}
+        onAcaoExtra={eventoParaApagar?.recorrente ? () => confirmarApagar(false) : undefined}
+        destrutivo
+        onConfirmar={() => confirmarApagar(eventoParaApagar?.recorrente ? true : undefined)}
+        onFechar={() => setEventoParaApagar(null)}
+      />
+
+      {/* MUDANÇA (item 2): escolha de escopo antes de abrir a edição de um
+          evento recorrente — perguntada aqui (não dentro da ConfirmScreen)
+          porque a decisão precisa acontecer ANTES de ela começar a mexer
+          nos campos, e ConfirmScreen usa o `ocorrencia` recebido só na
+          hora de salvar, sem repetir essa pergunta. */}
+      <ConfirmDialog
+        visivel={eventoParaEscolherEscopoEdicao !== null}
+        titulo="Editar evento recorrente"
+        mensagem={
+          eventoParaEscolherEscopoEdicao
+            ? `"${eventoParaEscolherEscopoEdicao.titulo}" se repete. O que você quer editar?`
+            : ''
+        }
+        icone="edit-2"
+        textoCancelar="Cancelar"
+        textoConfirmar="Este e os futuros"
+        textoAcaoExtra="Somente este evento"
+        onAcaoExtra={() => {
+          if (!eventoParaEscolherEscopoEdicao) return;
+          const evento = eventoParaEscolherEscopoEdicao;
+          setEventoParaEscolherEscopoEdicao(null);
+          navegarParaEdicao(evento, { instanceStartDate: evento.data, futureEvents: false });
+        }}
+        onConfirmar={() => {
+          if (!eventoParaEscolherEscopoEdicao) return;
+          const evento = eventoParaEscolherEscopoEdicao;
+          setEventoParaEscolherEscopoEdicao(null);
+          navegarParaEdicao(evento, { instanceStartDate: evento.data, futureEvents: true });
+        }}
+        onFechar={() => setEventoParaEscolherEscopoEdicao(null)}
+      />
+
+      {/* MUDANÇA (item 6): limpeza em lote. Por padrão pula os fixados —
+          fixar é um sinal explícito de "isso importa", então a ação extra
+          "Incluir fixados" só aparece quando existe pelo menos um passado
+          fixado, evitando o botão vazio no caso comum. */}
+      <ConfirmDialog
+        visivel={confirmandoLimpezaPassados}
+        titulo="Limpar eventos passados"
+        mensagem={`Apagar os ${eventosPassadosNaoFixados.length} eventos que já passaram da agenda?`}
         icone="trash-2"
         textoCancelar="Cancelar"
         textoConfirmar="Apagar"
+        textoAcaoExtra={eventosPassadosFixados.length > 0 ? `Incluir os ${eventosPassadosFixados.length} fixados` : undefined}
+        onAcaoExtra={eventosPassadosFixados.length > 0 ? () => confirmarLimpezaPassados(true) : undefined}
         destrutivo
-        onConfirmar={confirmarApagar}
-        onFechar={() => setEventoParaApagar(null)}
+        onConfirmar={() => confirmarLimpezaPassados(false)}
+        onFechar={() => setConfirmandoLimpezaPassados(false)}
       />
     </SafeAreaView>
   );
@@ -444,8 +719,39 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     resumoDivisor: { width: 1, height: 28, backgroundColor: theme.colors.border },
     resumoNumero: { ...theme.typography.heading, fontSize: 22, color: theme.colors.textPrimary },
     resumoLabel: { ...theme.typography.overline, color: theme.colors.textMuted, marginTop: 3 },
+    // MUDANÇA (9.5): campo de busca por título — mesmo padrão visual de
+    // `resumoRow` (fundo/borda/raio), só que em row compacta com ícone de
+    // lupa fixo à esquerda, pra ficar claramente diferente do resumo
+    // numérico acima e das abas de tag logo abaixo.
+    buscaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.xs + 2,
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      paddingHorizontal: theme.spacing.sm + 2,
+      marginBottom: theme.spacing.md,
+    },
+    buscaInput: {
+      flex: 1,
+      paddingVertical: theme.spacing.sm,
+      ...theme.typography.body,
+      color: theme.colors.textPrimary,
+    },
     tabsScroll: { flexGrow: 0, marginBottom: theme.spacing.md },
     tabsContent: { gap: theme.spacing.xs, paddingRight: theme.spacing.lg },
+    // MUDANÇA (item 6): link discreto — não é uma ação de todo dia, então
+    // fica pequena e neutra, sem competir visualmente com as abas de tag.
+    linkLimparPassados: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.xs - 2,
+      alignSelf: 'flex-start',
+      marginBottom: theme.spacing.md,
+    },
+    linkLimparPassadosTexto: { ...theme.typography.caption, color: theme.colors.textMuted },
     tab: {
       paddingVertical: theme.spacing.xs + 3,
       paddingHorizontal: theme.spacing.sm + 6,
@@ -489,8 +795,14 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       elevation: theme.shadow.opacity > 0 ? 2 : 0,
     },
     // Traço lateral — grosso o bastante pra cor ser reconhecível de
-    // relance, sem virar um fundo colorido no card inteiro.
-    faixa: { width: 6 },
+    // relance, sem virar um fundo colorido no card inteiro. MUDANÇA (item
+    // 4): de 6px pra 9px — com até 3 segmentos empilhados (uma tag cada),
+    // 6px deixava cada segmento fino demais pra cor ser reconhecível.
+    faixa: { width: 9, flexDirection: 'column' },
+    // Um segmento por tag (até 3), altura igual entre eles — `flex: 1` faz
+    // cada View dividir a altura do card igualmente, sem precisar calcular
+    // porcentagem manualmente.
+    faixaSegmento: { flex: 1 },
     cardConteudo: {
       flex: 1,
       flexDirection: 'row',
@@ -501,6 +813,10 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     cardTituloRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     cardTitulo: { ...theme.typography.subheading, color: theme.colors.textPrimary, flexShrink: 1 },
     cardMetaRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, marginTop: 5 },
+    // MUDANÇA (item 4): linha própria pra pills de tag (até 3 + indicador
+    // "+N"), com flexWrap pra não estourar a largura do card quando várias
+    // tags têm nomes longos.
+    cardTagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 5 },
     cardData: { ...theme.typography.caption, color: theme.colors.textSecondary },
     cardDataUrgente: { color: theme.colors.urgent, fontFamily: theme.typography.bodyMedium.fontFamily },
     cardTagPill: {
@@ -518,11 +834,24 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     cardTagTexto: { ...theme.typography.caption, color: theme.colors.textMuted },
     cardDias: { ...theme.typography.caption, color: theme.colors.textSecondary },
     cardDiasUrgente: { color: theme.colors.urgent, fontFamily: theme.typography.bodyMedium.fontFamily },
-    acaoApagar: {
+    // MUDANÇA (item 5): as duas ações de swipe (fixar + apagar) lado a
+    // lado, mesmo espaçamento/raio que "apagar" já usava sozinho.
+    acoesSwipeRow: { flexDirection: 'row', gap: theme.spacing.sm - 4 },
+    acaoFixar: {
       width: 64,
       borderRadius: theme.radius.lg,
       marginBottom: theme.spacing.sm + 2,
       marginLeft: theme.spacing.sm,
+      backgroundColor: theme.colors.surfaceElevated,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    acaoApagar: {
+      width: 64,
+      borderRadius: theme.radius.lg,
+      marginBottom: theme.spacing.sm + 2,
       backgroundColor: theme.colors.urgentBg,
       borderWidth: 1,
       borderColor: theme.colors.urgent + '40',
