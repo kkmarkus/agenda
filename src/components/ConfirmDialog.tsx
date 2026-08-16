@@ -1,3 +1,7 @@
+// Modal de confirmação/aviso genérico, reaproveitado em todo o app (avisos
+// de validação, confirmação de exclusão, escolha de escopo de edição
+// recorrente etc). Suporta um terceiro botão opcional ("ação extra"), usado
+// por exemplo pra oferecer "só esta ocorrência" vs "esta e as futuras".
 import React, { useMemo } from 'react';
 import { Modal, View, Text, Pressable, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
@@ -8,30 +12,18 @@ type Props = {
   titulo: string;
   mensagem: string;
   icone?: keyof typeof Feather.glyphMap;
-  // Se textoCancelar for omitido, o diálogo vira informativo (só um botão).
+
   textoCancelar?: string;
   textoConfirmar?: string;
-  // Estilo destrutivo (vermelho) pra ações como apagar — reaproveita a
-  // mesma linguagem visual do botão de apagar por swipe no Dashboard
-  // (urgentBg + borda urgent), em vez de inventar uma cor nova aqui.
+
   destrutivo?: boolean;
-  // MUDANÇA (item 2): terceira opção opcional, pra decisões de 3 vias como
-  // "Somente este evento" / "Este e os futuros" / "Cancelar" (edição e
-  // exclusão de eventos recorrentes). Sem ela, o diálogo continua com só
-  // as duas ações de sempre (nenhum uso existente precisa mudar). Quando
-  // presente, os botões empilham verticalmente em vez de lado a lado —
-  // três botões numa linha só ficariam apertados demais pros rótulos mais
-  // longos desse caso.
+
   textoAcaoExtra?: string;
   onAcaoExtra?: () => void;
   onConfirmar: () => void;
   onFechar: () => void;
 };
 
-// Substitui o Alert.alert nativo (que não segue tema nenhum, sempre sai
-// branco/estilo Material puro) por um modal no mesmo padrão visual do
-// TagColorPicker: cartão com puxador, overline, título e botões nos
-// tokens do tema. Reutilizável em qualquer confirmação/aviso do app.
 export default function ConfirmDialog({
   visivel,
   titulo,
@@ -65,6 +57,7 @@ export default function ConfirmDialog({
           <Text style={styles.mensagem}>{mensagem}</Text>
 
           {temAcaoExtra ? (
+            // Com 3 botões, empilha em coluna (cabe melhor que 3 numa linha só).
             <View style={styles.botoesColuna}>
               <Pressable
                 style={({ pressed }) => [
@@ -91,7 +84,7 @@ export default function ConfirmDialog({
               </Pressable>
               {textoCancelar && (
                 <Pressable
-                  style={({ pressed }) => [styles.botaoTexto, { opacity: pressed ? 0.6 : 1 }]}
+                  style={({ pressed }) => [styles.botaoSecundario, { opacity: pressed ? 0.7 : 1 }]}
                   onPress={onFechar}
                 >
                   <Text style={styles.botaoSecundarioTexto} numberOfLines={1}>
@@ -193,15 +186,9 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       lineHeight: 20,
     },
     botoesRow: { flexDirection: 'row', gap: theme.spacing.sm },
-    // MUDANÇA (item 2): layout empilhado pra quando há 3 opções — lado a
-    // lado ficaria apertado demais pros rótulos mais longos desse caso
-    // ("Este e os futuros").
+
     botoesColuna: { gap: theme.spacing.sm },
-    botaoTexto: { alignItems: 'center', justifyContent: 'center', paddingVertical: theme.spacing.xs },
-    // minHeight fixo nos dois botões: o texto muda de tamanho conforme o
-    // estado ("Cancelar" vs "Apagar" vs "Entendi"), mas a altura do botão
-    // não pode mudar por causa disso — mesmo raciocínio aplicado nos
-    // botões da ConfirmScreen.
+
     botaoSecundario: {
       flex: 1,
       minHeight: 50,

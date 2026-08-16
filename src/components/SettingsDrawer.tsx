@@ -7,7 +7,7 @@ import * as FileSystem from 'expo-file-system';
 import { useTheme, useThemeConfig, ModoPreferido } from '../theme/ThemeContext';
 import { ACCENT_PRESETS } from '../theme/theme';
 import {
-  obterPreferencia,
+  lerDuracaoEAntecedenciaPadrao,
   definirPreferencia,
   PREF_DURACAO_PADRAO_MINUTOS,
   PREF_ANTECEDENCIA_ALARME_PADRAO_MINUTOS,
@@ -15,12 +15,17 @@ import {
   restaurarBackup,
   BackupDados,
 } from '../services/database';
+import * as Calendar from 'expo-calendar';
 import { obterStatusPermissao } from '../services/calendarService';
-import SlidePanel, { LARGURA_PAINEL_PADRAO } from './SlidePanel';
+import SlidePanel from './SlidePanel';
 import TagsPanelContent from './TagsPanelContent';
 import CalendarSyncPanelContent from './CalendarSyncPanelContent';
 import ConfirmDialog from './ConfirmDialog';
 import appJson from '../../app.json';
+
+// Painel principal de configurações (tema, padrões de duração/alarme,
+// backup) que também abre os sub-painéis de Tags e Sincronização por
+// cima de si mesmo (ver `painelAberto`).
 
 type Props = {
   visivel: boolean;
@@ -33,11 +38,6 @@ const OPCOES_MODO: { valor: ModoPreferido; label: string; icone: keyof typeof Fe
   { valor: 'system', label: 'Sistema', icone: 'smartphone' },
 ];
 
-// MUDANÇA (item 8.1): opções fixas dos padrões globais de duração/alarme —
-// os mesmos valores oferecidos por evento na ConfirmScreen, exceto
-// "Personalizado"/"Dia inteiro"/"Sem alarme": o padrão global precisa ser
-// um valor concreto sempre aplicável a qualquer evento novo, então fica
-// restrito ao mesmo conjunto fechado de opções comuns.
 const OPCOES_DURACAO_PADRAO: { valor: '30' | '60' | '120'; label: string }[] = [
   { valor: '30', label: '30 min' },
   { valor: '60', label: '1h' },
@@ -51,50 +51,21 @@ const OPCOES_ANTECEDENCIA_PADRAO: { valor: '10' | '30' | '60' | '1440'; label: s
   { valor: '1440', label: '1 dia' },
 ];
 
-/**
- * Menu lateral de configurações. A animação de slide/backdrop mora agora em
- * SlidePanel.tsx (item 7) — este componente só monta o CONTEÚDO e controla
- * a pilha de painéis empilhados (Tags/Sincronizar), que abrem por cima
- * dele sem fechá-lo nem trocar de tela.
- *
- * CORREÇÃO (performance): o Dashboard mantém este componente sempre
- * montado por trás dele (comentário mais abaixo), então digitar na busca,
- * trocar de aba de tag ou puxar a lista pra atualizar — qualquer
- * re-render do Dashboard — recriava a árvore inteira do menu de
- * configurações (todos os itens, o seletor de tema, a grade de cores) a
- * cada tecla digitada, mesmo com o menu fechado e invisível. `React.memo`
- * faz o componente só re-renderizar quando `visivel`/`onFechar`
- * realmente mudam — quem chama precisa passar um `onFechar` estável (ver
- * `useCallback` em DashboardScreen.tsx) pra isso funcionar de verdade.
- */
 function SettingsDrawer({ visivel, onFechar }: Props) {
   const theme = useTheme();
   const { modoPreferido, presetAtual, definirModoPreferido, definirAccentPresetId } = useThemeConfig();
   const styles = useMemo(() => criarStyles(theme), [theme]);
 
-  // MUDANÇA (item 7): pilha simples de estado — só existe uma raiz (este
-  // drawer) e, no máximo, UM painel secundário empilhado por vez (não faz
-  // sentido abrir Tags e Sincronizar simultaneamente). `null` = nenhum
-  // painel secundário aberto, ou seja, "na raiz".
   const [painelAberto, setPainelAberto] = useState<'tags' | 'sincronizar' | null>(null);
 
-  // Fechar o drawer inteiro (backdrop do próprio drawer) sempre fecha os
-  // dois de uma vez e reseta a pilha, pra reabrir sempre na raiz.
   function fecharTudo() {
     setPainelAberto(null);
     onFechar();
   }
 
-  // CORREÇÃO (remoção dos botões de voltar/fechar próprios — item da
-  // etapa de bugs): sem os botões "arrow-left" de TagsPanelContent e
-  // CalendarSyncPanelContent, o único jeito de sair de um painel
-  // empilhado passa a ser o backdrop (que já fecha só ele, ver
-  // `onFechar` do SlidePanel empilhado mais abaixo) ou o botão/gesto de
-  // voltar nativo do Android. Esse último, antes, estava ligado direto a
-  // `fecharTudo` no SlidePanel raiz — pressionar voltar com um painel
-  // empilhado aberto pulava os dois níveis de uma vez, em vez de sair só
-  // do painel de cima primeiro. Esta função dá um passo de cada vez: sai
-  // do painel empilhado se houver um aberto, senão fecha o drawer.
+  // Botão "voltar"/gesto de fechar: se um sub-painel (Tags/Sincronizar)
+  // estiver aberto por cima, fecha só ele primeiro; só fecha tudo se já
+  // estiver na tela principal de Configurações.
   function fecharUmNivel() {
     if (painelAberto !== null) {
       setPainelAberto(null);
@@ -103,46 +74,25 @@ function SettingsDrawer({ visivel, onFechar }: Props) {
     }
   }
 
-  // MUDANÇA (item 8.1): padrões globais de duração/alarme, persistidos em
-  // `preferencias`. Recarregados toda vez que o drawer abre (não só na
-  // montagem) — o componente fica sempre montado por trás do Dashboard
-  // (ver comentário em DashboardScreen), então um `useEffect` com `[]` só
-  // rodaria uma vez na vida do app inteiro.
   const [duracaoPadrao, setDuracaoPadraoState] = useState<'30' | '60' | '120'>('60');
   const [antecedenciaPadrao, setAntecedenciaPadraoState] = useState<'10' | '30' | '60' | '1440'>('30');
 
-  // MUDANÇA (item 8.2): status atual da permissão de agenda, só pra
-  // exibição — checado de novo toda vez que o drawer abre (`useEffect` no
-  // `visivel`, não só na montagem), pra refletir se ela mudou a permissão
-  // fora do app (ex: revogou em Configurações do Android e voltou).
-  const [statusPermissao, setStatusPermissao] = useState<'granted' | 'denied' | 'undetermined'>('undetermined');
+  const [statusPermissao, setStatusPermissao] = useState<Calendar.PermissionStatus>(
+    Calendar.PermissionStatus.UNDETERMINED
+  );
 
-  // MUDANÇA (8.3): dados prontos pra restaurar, aguardando confirmação
-  // dela no ConfirmDialog (aviso explícito de que isso substitui
-  // cores/preferências atuais) — só chamamos `restaurarBackup` de fato
-  // depois que ela confirmar. `aviso` cobre tanto o resultado de
-  // exportar/importar (sucesso ou erro) quanto avisos simples de texto
-  // único — mesmo padrão de `ConfirmScreen`/`ConfirmMultiplosScreen`, no
-  // lugar do `Alert.alert` nativo.
   const [backupPendente, setBackupPendente] = useState<BackupDados | null>(null);
   const [aviso, setAviso] = useState<{ titulo: string; mensagem: string } | null>(null);
   const [processandoBackup, setProcessandoBackup] = useState(false);
 
+  // Recarrega as preferências e o status de permissão toda vez que o
+  // painel abre, pra refletir mudanças feitas em outra tela (ex: usuário
+  // concedeu a permissão pelas configurações do sistema e voltou).
   useEffect(() => {
     if (!visivel) return;
-    const duracaoSalva = obterPreferencia(PREF_DURACAO_PADRAO_MINUTOS);
-    if (duracaoSalva === '30' || duracaoSalva === '60' || duracaoSalva === '120') {
-      setDuracaoPadraoState(duracaoSalva);
-    }
-    const antecedenciaSalva = obterPreferencia(PREF_ANTECEDENCIA_ALARME_PADRAO_MINUTOS);
-    if (
-      antecedenciaSalva === '10' ||
-      antecedenciaSalva === '30' ||
-      antecedenciaSalva === '60' ||
-      antecedenciaSalva === '1440'
-    ) {
-      setAntecedenciaPadraoState(antecedenciaSalva);
-    }
+    const { duracaoPadrao, antecedenciaPadrao } = lerDuracaoEAntecedenciaPadrao();
+    if (duracaoPadrao) setDuracaoPadraoState(duracaoPadrao);
+    if (antecedenciaPadrao) setAntecedenciaPadraoState(antecedenciaPadrao);
 
     obterStatusPermissao().then((status) => setStatusPermissao(status));
   }, [visivel]);
@@ -157,14 +107,6 @@ function SettingsDrawer({ visivel, onFechar }: Props) {
     definirPreferencia(PREF_ANTECEDENCIA_ALARME_PADRAO_MINUTOS, valor);
   }
 
-  /**
-   * MUDANÇA (8.3): monta o JSON via `montarBackup` (database.ts) e abre a
-   * folha de compartilhamento nativa (`expo-sharing`) — ela escolhe pra
-   * onde mandar (Drive, WhatsApp, e-mail...), o app não decide isso por
-   * ela. Precisa escrever num arquivo real primeiro (`expo-file-system`):
-   * `Sharing.shareAsync` compartilha um caminho de arquivo, não uma string
-   * solta em memória.
-   */
   async function handleExportarDados() {
     setProcessandoBackup(true);
     try {
@@ -184,30 +126,52 @@ function SettingsDrawer({ visivel, onFechar }: Props) {
         encoding: FileSystem.EncodingType.UTF8,
       });
       await Sharing.shareAsync(caminho, { mimeType: 'application/json', dialogTitle: 'Exportar dados do Agenda' });
-    } catch {
+    } catch (erro) {
+      console.error('Erro ao exportar backup:', erro);
       setAviso({ titulo: 'Erro ao exportar', mensagem: 'Não foi possível gerar o arquivo de backup. Tente novamente.' });
     } finally {
       setProcessandoBackup(false);
     }
   }
 
-  /**
-   * Valida o mínimo antes de aceitar como backup de verdade — não confia
-   * cegamente em qualquer JSON que ela escolher no seletor de arquivo
-   * (podia ser qualquer coisa, de um .json qualquer do Downloads a um
-   * arquivo corrompido). Checa só a FORMA (campos existem e são arrays),
-   * não o conteúdo de cada item — inconsistências ali (ex: uma cor_index
-   * fora do intervalo válido) já são absorvidas pelos mesmos limites que
-   * protegem `garantirCorDaTag` no uso normal do app.
-   */
+  // Valida a forma de cada item, não só a presença dos arrays no nível
+  // raiz — um JSON com `tagCores: [{}]` passava na checagem anterior e só
+  // ia dar problema depois, silenciosamente (ex: `corIndex` inválido vira
+  // `undefined` em `paleta[corIndex % paleta.length]` e quebra a tela de
+  // Tags só quando o usuário for olhar aquela tag específica).
   function pareceBackupValido(valor: unknown): valor is BackupDados {
     if (!valor || typeof valor !== 'object') return false;
     const v = valor as Record<string, unknown>;
+
+    if (
+      !Array.isArray(v.tagCores) ||
+      !Array.isArray(v.eventoTags) ||
+      !Array.isArray(v.preferencias) ||
+      !Array.isArray(v.calendariosSync)
+    ) {
+      return false;
+    }
+
+    const textoNaoVazio = (x: unknown): x is string => typeof x === 'string' && x.trim().length > 0;
+    const corIndexValido = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 0;
+
     return (
-      Array.isArray(v.tagCores) &&
-      Array.isArray(v.eventoTags) &&
-      Array.isArray(v.preferencias) &&
-      Array.isArray(v.calendariosSync)
+      v.tagCores.every((item) => {
+        const i = item as Record<string, unknown>;
+        return textoNaoVazio(i?.tag) && corIndexValido(i?.corIndex);
+      }) &&
+      v.eventoTags.every((item) => {
+        const i = item as Record<string, unknown>;
+        return textoNaoVazio(i?.nativeEventId) && textoNaoVazio(i?.tag);
+      }) &&
+      v.preferencias.every((item) => {
+        const i = item as Record<string, unknown>;
+        return textoNaoVazio(i?.chave) && typeof i?.valor === 'string';
+      }) &&
+      v.calendariosSync.every((item) => {
+        const i = item as Record<string, unknown>;
+        return textoNaoVazio(i?.calendarId) && typeof i?.ativo === 'boolean';
+      })
     );
   }
 
@@ -230,40 +194,29 @@ function SettingsDrawer({ visivel, onFechar }: Props) {
         return;
       }
 
-      // Não restaura direto — guarda pendente e pede confirmação explícita
-      // (ver ConfirmDialog abaixo), já que isso SUBSTITUI cores e
-      // preferências atuais por coincidência de chave.
       setBackupPendente(dados);
-    } catch {
+    } catch (erro) {
+      console.error('Erro ao importar backup:', erro);
       setAviso({ titulo: 'Erro ao importar', mensagem: 'Não foi possível ler o arquivo selecionado.' });
     } finally {
       setProcessandoBackup(false);
     }
   }
 
+  // Depois de restaurar, releitura das preferências: a duração/
+  // antecedência padrão podem ter vindo diferentes no backup importado.
   function confirmarRestauracao() {
     if (!backupPendente) return;
     try {
       restaurarBackup(backupPendente);
       setBackupPendente(null);
-      // Cores/duração/alarme padrão podem ter mudado com a restauração —
-      // recarrega os dois pra refletir no drawer sem precisar fechar e
-      // reabrir.
-      const duracaoSalva = obterPreferencia(PREF_DURACAO_PADRAO_MINUTOS);
-      if (duracaoSalva === '30' || duracaoSalva === '60' || duracaoSalva === '120') {
-        setDuracaoPadraoState(duracaoSalva);
-      }
-      const antecedenciaSalva = obterPreferencia(PREF_ANTECEDENCIA_ALARME_PADRAO_MINUTOS);
-      if (
-        antecedenciaSalva === '10' ||
-        antecedenciaSalva === '30' ||
-        antecedenciaSalva === '60' ||
-        antecedenciaSalva === '1440'
-      ) {
-        setAntecedenciaPadraoState(antecedenciaSalva);
-      }
+
+      const { duracaoPadrao, antecedenciaPadrao } = lerDuracaoEAntecedenciaPadrao();
+      if (duracaoPadrao) setDuracaoPadraoState(duracaoPadrao);
+      if (antecedenciaPadrao) setAntecedenciaPadraoState(antecedenciaPadrao);
       setAviso({ titulo: 'Dados restaurados', mensagem: 'O backup foi importado com sucesso.' });
-    } catch {
+    } catch (erro) {
+      console.error('Erro ao restaurar backup:', erro);
       setAviso({ titulo: 'Erro ao restaurar', mensagem: 'Não foi possível aplicar o backup. Nada foi alterado.' });
     }
   }
@@ -297,22 +250,19 @@ function SettingsDrawer({ visivel, onFechar }: Props) {
           <Feather name="chevron-right" size={16} color={theme.colors.textMuted} />
         </Pressable>
 
-        {/* MUDANÇA (item 8.2): status da permissão de agenda. Só mostra o
-            botão de abrir configurações quando NÃO está concedida — depois
-            de negada uma vez, o Android não deixa mais o app reabrir o
-            diálogo nativo de permissão sozinho. */}
+        {/* Status de permissão da agenda, com atalho pras configurações do sistema se ainda não concedida. */}
         <View style={styles.itemMenu}>
           <View style={styles.itemIconeCirculo}>
             <Feather
-              name={statusPermissao === 'granted' ? 'check-circle' : 'alert-circle'}
+              name={statusPermissao === Calendar.PermissionStatus.GRANTED ? 'check-circle' : 'alert-circle'}
               size={16}
-              color={statusPermissao === 'granted' ? theme.colors.accent : theme.colors.urgent}
+              color={statusPermissao === Calendar.PermissionStatus.GRANTED ? theme.colors.accent : theme.colors.urgent}
             />
           </View>
           <Text style={styles.itemTexto}>
-            {statusPermissao === 'granted' ? 'Acesso à agenda concedido' : 'Sem acesso à agenda'}
+            {statusPermissao === Calendar.PermissionStatus.GRANTED ? 'Acesso à agenda concedido' : 'Sem acesso à agenda'}
           </Text>
-          {statusPermissao !== 'granted' && (
+          {statusPermissao !== Calendar.PermissionStatus.GRANTED && (
             <Pressable
               style={({ pressed }) => [styles.botaoAbrirConfig, { opacity: pressed ? 0.7 : 1 }]}
               onPress={() => Linking.openSettings()}
@@ -449,28 +399,13 @@ function SettingsDrawer({ visivel, onFechar }: Props) {
           <Text style={styles.rodapeTexto}>
             {appJson.expo.name} · v{appJson.expo.version}
           </Text>
-          {/* MUDANÇA (8.4): item discreto — 1 linha, sem virar uma tela de
-              ajuda separada, pra não destoar do tom minimalista do rodapé. */}
-          <Pressable
-            style={({ pressed }) => [styles.linkFeedback, { opacity: pressed ? 0.6 : 1 }]}
-            onPress={() => Linking.openURL('mailto:contato@agendaapp.dev?subject=Feedback%20do%20Agenda')}
-          >
-            <Feather name="mail" size={12} color={theme.colors.textMuted} />
-            <Text style={styles.rodapeTexto}>Enviar feedback</Text>
-          </Pressable>
         </View>
       </ScrollView>
 
-      {/* MUDANÇA (item 7): painel empilhado — aparece por cima deste
-          drawer, sem Modal próprio (semModalProprio) e com zIndice maior,
-          pra ficar visualmente acima. Fecha só ele mesmo
-          (setPainelAberto(null)) por backdrop ou pelo voltar nativo (ver
-          `fecharUmNivel` acima); o drawer de configurações continua
-          montado e visível por trás, do jeito que já estava. */}
+      {/* Sub-painel (Tags ou Sincronizar) empilhado por cima deste, sem Modal próprio pra não aninhar modais. */}
       <SlidePanel
         visivel={painelAberto !== null}
         onFechar={() => setPainelAberto(null)}
-        largura={LARGURA_PAINEL_PADRAO}
         semModalProprio
         zIndice={60}
       >
@@ -560,13 +495,7 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
     },
     segmentoItemAtivo: { backgroundColor: theme.colors.accent },
     segmentoTexto: { ...theme.typography.caption, color: theme.colors.textSecondary },
-    // CORREÇÃO (bug 5): antes só tinha `gap`, sem `justifyContent` nem
-    // número de colunas fixo — o flexWrap ia encaixando quantas bolinhas
-    // coubessem na largura disponível (5 numa tela, podendo virar 4 ou 6
-    // em outra), sobrando uma linha final incompleta e "torta". Fixando 4
-    // colunas de verdade (bolinhaWrapper com width fixa + space-between),
-    // as 8 cores sempre desenham 2 linhas parelhas de 4, em qualquer
-    // tamanho de tela.
+
     gradeCores: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: theme.spacing.sm + 2 },
     bolinhaWrapper: {
       width: '22%',
@@ -597,9 +526,5 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       gap: theme.spacing.xs,
     },
     rodapeTexto: { ...theme.typography.caption, color: theme.colors.textMuted, textAlign: 'center' },
-    // MUDANÇA (8.4): link discreto abaixo do "Agenda · vX.X.X" — mesmo tom
-    // (textMuted, caption), só com o ícone de envelope junto pra sinalizar
-    // que é tocável, sem virar um botão chamativo.
-    linkFeedback: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
   });
 }

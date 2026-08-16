@@ -1,3 +1,6 @@
+// Modal pra renomear uma tag e/ou trocar sua cor. Usa a paleta
+// "acentuada" nas bolinhas de seleção (mais viva/legível como amostra),
+// mas o resto do app usa a paleta normal pra não competir com o accent do tema.
 import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, View, Text, Pressable, StyleSheet, TextInput } from 'react-native';
 import { Feather } from '@expo/vector-icons';
@@ -8,24 +11,15 @@ type Props = {
   visivel: boolean;
   tag: string;
   corAtual: number;
-  onSelecionar: (corIndex: number) => void;
-  // MUDANÇA (9.2): novoNome já vem "trimado" e sem estar vazio — quem
-  // chama (TagsPanelContent) decide o que fazer com mesclagem (aqui o
-  // picker só avisa que o nome mudou, a lógica de mesclar/renomear vive
-  // em database.ts).
+
+  onSelecionar: (corIndex: number, novoNomeSeAlterado?: string) => void;
+
   onRenomear: (novoNome: string) => void;
-  // Só sinaliza a intenção — a confirmação destrutiva (ConfirmDialog) e a
-  // chamada real de apagar vivem em TagsPanelContent, não aqui, pra não
-  // empilhar modal-dentro-de-modal-de-confirmação neste componente.
+
   onSolicitarApagar: () => void;
   onFechar: () => void;
 };
 
-// Modal com as bolinhas da paleta do tema atual — toque pra escolher, toque
-// fora ou em "Fechar" pra cancelar. Também permite renomear (e, ao renomear
-// pra um nome já existente, mesclar automaticamente) ou apagar a tag por
-// completo. Chamado a partir de um toque simples no card da tag em
-// TagsPanelContent.
 export default function TagColorPicker({
   visivel,
   tag,
@@ -37,28 +31,27 @@ export default function TagColorPicker({
 }: Props) {
   const theme = useTheme();
   const styles = useMemo(() => criarStyles(theme), [theme]);
-  // Paleta muda com o tema (claro/escuro) pra manter contraste — o índice
-  // gravado no banco é o mesmo, só a cor exibida em cada posição muda.
+
   const paleta = theme.mode === 'dark' ? TAG_PALETTE_DARK : TAG_PALETTE_LIGHT;
-  // CORREÇÃO (item D — opção 2): as bolinhas do seletor mostram a versão
-  // mais saturada, pra bater com o que ela vai ver na bolinha do Dashboard
-  // e na faixa do painel de Tags — mesmo índice, só a cor de exibição
-  // muda (o índice gravado no banco continua sendo o da paleta original).
+
   const paletaAcentuada = theme.mode === 'dark' ? TAG_PALETTE_DARK_ACENTUADA : TAG_PALETTE_LIGHT_ACENTUADA;
 
-  // Estado local do campo de nome — reseta pro nome atual sempre que o
-  // modal abre pra uma tag diferente (ou reabre pra mesma), pra nunca
-  // mostrar um rascunho de edição de uma abertura anterior.
   const [nome, setNome] = useState(tag);
   useEffect(() => {
     if (visivel) setNome(tag);
   }, [visivel, tag]);
 
+  // Se o usuário mudou o nome mas ainda não confirmou, escolher uma cor
+  // já aplica o renome junto (evita ter que apertar dois botões).
   const nomeMudou = nome.trim().length > 0 && nome.trim() !== tag;
 
   function handleSalvarNome() {
     if (!nomeMudou) return;
     onRenomear(nome.trim());
+  }
+
+  function handleSelecionarCor(index: number) {
+    onSelecionar(index, nomeMudou ? nome.trim() : undefined);
   }
 
   return (
@@ -104,7 +97,7 @@ export default function TagColorPicker({
                     selecionada && styles.bolinhaWrapperSelecionada,
                     { opacity: pressed ? 0.8 : 1 },
                   ]}
-                  onPress={() => onSelecionar(index)}
+                  onPress={() => handleSelecionarCor(index)}
                 >
                   <View style={[styles.bolinha, { backgroundColor: corVivo.base }]}>
                     {selecionada && <Feather name="check" size={16} color={cor.text} />}

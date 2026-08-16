@@ -1,20 +1,7 @@
-// Tokens de design centralizados. Nenhuma cor, espaçamento, raio ou fonte
-// deve ficar hardcoded nas telas — tudo vem daqui via useTheme().
-//
-// LINGUAGEM VISUAL (revisada): o app deixou de ter uma tinta de marca fixa
-// (Royal Plum). Fundo, superfície, borda e texto agora são GERADOS a
-// partir do matiz do preset de acento escolhido — se a usuária escolhe
-// Royal (azul), fundo/bordas/título/texto ficam todos numa variação de
-// azul; se escolhe Framboesa, todos ficam numa variação de rosa. Só
-// luminosidade/saturação de cada camada são fixas (é o que dá a
-// hierarquia visual sempre igual, ex. "borda sempre mais escura que
-// superfície"); o matiz em si vem do preset. Grafite é a exceção
-// deliberada: satura muito pouco esses mesmos tokens, pra ser a opção
-// "sem cor" de propósito. Preto AMOLED no modo escuro continua fixo (é
-// economia de bateria real, não teria sentido tingir isso). Vermelho de
-// urgência e verde de sucesso também continuam fixos nos dois modos —
-// são cores de status, não decorativas, não devem mudar com o acento.
-
+// Definição dos temas (claro/escuro) e das paletas de cor de acento e de
+// tags. Os neutros (fundo/texto/borda) são gerados a partir do matiz do
+// accent escolhido, pra dar uma leve "tonalização" consistente em vez de
+// cinza puro.
 export type ThemeColors = {
   background: string;
   surface: string;
@@ -27,9 +14,7 @@ export type ThemeColors = {
   accent: string;
   accentText: string;
   accentSoft: string;
-  // Par de cores do gradiente usado nos botões de ação principal (CTA de
-  // salvar/analisar) e no FAB — variação clara -> profunda dentro da
-  // própria família de cor do preset escolhido.
+
   gradientStart: string;
   gradientEnd: string;
   urgent: string;
@@ -38,9 +23,7 @@ export type ThemeColors = {
 };
 
 export type Theme = {
-  // Usado pra escolher a paleta de cor de tag certa (TAG_PALETTE_LIGHT ou
-  // TAG_PALETTE_DARK) sem precisar re-consultar useColorScheme() de novo
-  // em cada tela/componente que precisa disso.
+
   mode: 'light' | 'dark';
   colors: ThemeColors;
   spacing: { xs: number; sm: number; md: number; lg: number; xl: number };
@@ -52,25 +35,17 @@ export type Theme = {
     body: { fontFamily: string; fontSize: number; letterSpacing: number };
     bodyMedium: { fontFamily: string; fontSize: number; letterSpacing: number };
     caption: { fontFamily: string; fontSize: number; letterSpacing: number };
-    // Label em caixa alta com tracking largo — a assinatura tipográfica
-    // "editorial/premium" usada acima de todo campo e seção (DATA, HORA,
-    // TAG, etc). Sempre .toUpperCase() no texto que usa esse token.
+
     overline: { fontFamily: string; fontSize: number; letterSpacing: number };
   };
-  // Sombra "padrão" de elevação de card — difusa e discreta, não a sombra
-  // "genérica" de UI kit. No tema escuro isso não usa preto (invisível
-  // sobre fundo já preto) — a profundidade ali vem da diferença entre
-  // background/surface/surfaceElevated e de uma borda sutil.
+
   shadow: {
     color: string;
     opacity: number;
     radius: number;
     offsetY: number;
   };
-  // Sombra mais ampla e suave, reservada pro CTA principal e pro FAB —
-  // um "glow" de cor em vez de sombra neutra, pra dar peso ao ponto de
-  // ação principal da tela sem pesar o resto da UI. A cor do glow segue
-  // o preset de acento escolhido.
+
   glow: {
     color: string;
     opacity: number;
@@ -82,10 +57,6 @@ export type Theme = {
 const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 };
 const radius = { sm: 10, md: 14, lg: 20, xl: 28, pill: 999 };
 
-// Títulos usam Yeseva One — serif "retrô" bold/arredondada (mesma família
-// visual do print de referência), reservada só pra display/heading. Todo
-// o resto do texto do app usa Noto Serif, em pesos diferentes conforme a
-// hierarquia (Regular pro corpo, SemiBold pros destaques e overlines).
 const typography = {
   display: { fontFamily: 'YesevaOne_400Regular', fontSize: 32, letterSpacing: -0.2 },
   heading: { fontFamily: 'YesevaOne_400Regular', fontSize: 22, letterSpacing: -0.1 },
@@ -96,7 +67,8 @@ const typography = {
   overline: { fontFamily: 'NotoSerif_700Bold', fontSize: 11, letterSpacing: 1.4 },
 };
 
-// --- Utilitários de cor: só o necessário pra gerar neutros por matiz ---
+// Conversões hex <-> HSL: usadas pra extrair o matiz do accent e gerar os
+// neutros do tema na mesma família de cor.
 function hexParaHsl(hex: string): { h: number; s: number; l: number } {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -149,19 +121,12 @@ type NeutrosHue = Omit<
   'accent' | 'accentText' | 'accentSoft' | 'gradientStart' | 'gradientEnd' | 'urgent' | 'urgentBg' | 'success'
 >;
 
-/**
- * Gera os 8 tokens de "camada" (fundo/superfície/borda/texto) a partir de
- * UM matiz — o do preset de acento escolhido. Luminosidade/saturação de
- * cada camada são fixas por modo (é o que garante hierarquia visual
- * sempre igual, ex. borda sempre mais escura que superfície), só o matiz
- * muda. `intensidade` reduz a saturação pro preset Grafite (0.15), que é
- * a opção deliberadamente "sem cor" — os outros presets usam 1.
- */
+// Gera fundo/superfícies/texto/borda no matiz do accent, calibrados por
+// modo. `intensidade` reduz a saturação pro preset Grafite (neutro/"sem
+// cor") sem precisar duplicar toda a tabela de valores.
 function gerarNeutros(hue: number, modo: 'light' | 'dark', intensidade: number): NeutrosHue {
   if (modo === 'light') {
     return {
-      // Fundo/superfície claros continuam um "papel" com corpo (não
-      // branco puro) — só que agora o tom desse papel é o do preset.
       background: hslParaHex(hue, 38 * intensidade, 93),
       surface: hslParaHex(hue, 42 * intensidade, 88),
       surfaceElevated: hslParaHex(hue, 30 * intensidade, 97),
@@ -173,9 +138,8 @@ function gerarNeutros(hue: number, modo: 'light' | 'dark', intensidade: number):
     };
   }
   return {
-    // Fundo continua preto puro (AMOLED) sempre, independente do preset —
-    // tingir o preto não faria diferença visual e tira a economia de
-    // bateria de ser um preto "de verdade".
+    // Preto puro (AMOLED) sempre no modo escuro, independente do preset —
+    // tingir o preto não muda a percepção visual e economiza bateria.
     background: '#000000',
     surface: hslParaHex(hue, 24 * intensidade, 7),
     surfaceElevated: hslParaHex(hue, 24 * intensidade, 10.5),
@@ -187,11 +151,8 @@ function gerarNeutros(hue: number, modo: 'light' | 'dark', intensidade: number):
   };
 }
 
-// --- Cores semânticas: fixas nos dois modos, não seguem o acento ---
-// Urgência (vermelho) e sucesso (verde) são status, não decoração — se
-// mudassem de matiz junto com o preset escolhido (ex. alguém escolhe um
-// preset vermelho e o "urgente" deixa de destoar do resto da tela), a
-// própria função de alerta visual se perderia.
+// Cores semânticas (urgência/sucesso) são fixas nos dois modos e não
+// seguem o accent escolhido — são status, não decoração.
 type Semanticas = { urgent: string; urgentBg: string; success: string };
 
 const semanticasLight: Semanticas = {
@@ -206,19 +167,9 @@ const semanticasDark: Semanticas = {
   success: '#7FB088',
 };
 
-// Escuro não usa sombra de verdade (invisível sobre AMOLED, a profundidade
-// ali vem da diferença entre background/surface/surfaceElevated) — só o
-// claro precisa de opacidade > 0. A cor em si é preenchida em criarTema()
-// com o textPrimary já gerado pro matiz do preset (mais escuro = boa cor
-// de sombra "de graça", sem hardcodear plum de novo).
 const shadowConfigLight = { opacity: 0.08, radius: 14, offsetY: 4 };
 const shadowConfigDark = { color: '#000000', opacity: 0, radius: 0, offsetY: 0 };
 
-// --- Presets de acento: a cor de destaque escolhível pela usuária ---
-// Cada preset define os 5 tokens que dependem do acento, pros dois modos
-// (claro/escuro), calibrados pra manter contraste sobre o fundo Antique
-// White / AMOLED de cada modo — mesma lógica de contraste que o Bubblegum
-// original já usava, só replicada pras outras famílias de cor.
 export type AccentTokens = {
   accent: string;
   accentText: string;
@@ -231,20 +182,15 @@ export type AccentTokens = {
 export type AccentPreset = {
   id: string;
   nome: string;
-  // Cor representativa pro botão/bolinha do seletor de tema — usamos o
-  // tom do modo claro em ambos os casos, já que é sempre exibido sobre a
-  // superfície do tema ATUAL da tela de configurações (que já dá o
-  // contexto de claro/escuro), não precisa duplicar por modo.
+
   swatch: string;
   light: AccentTokens;
   dark: AccentTokens;
 };
 
-// Ordem = roda de cor (matiz crescente: dourado ~50° até tijolo ~352°),
-// não mais a ordem de criação bagunçada de antes. Grafite fica sempre
-// por último, fora da roda — é o preset "sem cor", não compete por
-// posição com os outros. Seguro reordenar: cada preset é referenciado
-// por `id` (string) em todo o app, nunca por índice numérico.
+// Presets de acento que o usuário pode escolher nas configurações. Cada
+// um define os tokens dependentes do accent nos dois modos. Grafite é o
+// padrão neutro/"sem cor" (ver ACCENT_PRESET_PADRAO_ID).
 export const ACCENT_PRESETS: AccentPreset[] = [
   {
     id: 'dourado',
@@ -270,8 +216,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
   {
     id: 'esmeralda',
     nome: 'Esmeralda',
-    // Afastado do verde de sucesso (#4B7A52 / #7FB088) — mais escuro e
-    // saturado, pra não ser lido como "confirmado/concluído" à toa.
+
     swatch: '#2D8053',
     light: {
       accent: '#2D8053',
@@ -283,9 +228,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     },
     dark: {
       accent: '#64C48F',
-      // Antes reaproveitava #2B1608 (residual do tema rosa original) —
-      // agora é um verde quase-preto calibrado no próprio matiz do
-      // accent (mesma lógica já usada em Dourado e Grafite).
+
       accentText: '#0D2B1A',
       accentSoft: '#1E3E2C',
       gradientStart: '#8FCCAA',
@@ -307,8 +250,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     },
     dark: {
       accent: '#62DAC2',
-      // Idem — era o mesmo #2B1608 residual do Esmeralda, agora um teal
-      // quase-preto no matiz do próprio accent.
+
       accentText: '#0D2B25',
       accentSoft: '#1E3E38',
       gradientStart: '#91DECF',
@@ -361,9 +303,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
   {
     id: 'framboesa',
     nome: 'Framboesa',
-    // Substitui o antigo Bubblegum — mesma família rosa/magenta, mas
-    // afastado o suficiente do vermelho de urgência e do próprio
-    // Bubblegum antigo pra não ser confundido com nenhum dos dois.
+
     swatch: '#BA2C8D',
     light: {
       accent: '#BA2C8D',
@@ -385,9 +325,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
   {
     id: 'tijolo',
     nome: 'Tijolo',
-    // Deliberadamente diferente do vermelho de urgência (#C1473B / #E58A78)
-    // pra nunca ser confundido com o alerta de evento próximo — um
-    // vermelho-marsala fechado e escuro, em vez de vermelho puro/vivo.
+
     swatch: '#862734',
     light: {
       accent: '#862734',
@@ -409,11 +347,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
   {
     id: 'grafite',
     nome: 'Grafite',
-    // O preset neutro: saturação bem baixa (8%) e matiz alinhado ao
-    // mesmo tom quente do fundo do app (~30°, a mesma família do bege
-    // Antique White), pra ficar "sem cor" sem destoar da identidade
-    // quente do app — evita um cinza frio/azulado que pareceria
-    // emprestado de outro app.
+
     swatch: '#5E5750',
     light: {
       accent: '#5E5750',
@@ -435,21 +369,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
 
 ];
 
-export const ACCENT_PRESET_PADRAO_ID = 'framboesa';
+export const ACCENT_PRESET_PADRAO_ID = 'grafite';
 
 export function obterAccentPreset(id: string): AccentPreset {
   return ACCENT_PRESETS.find((p) => p.id === id) ?? ACCENT_PRESETS[0];
 }
 
-/**
- * Monta o Theme completo (mesmo shape de sempre — nenhuma tela precisa
- * mudar) combinando os neutros GERADOS a partir do matiz do preset
- * escolhido com os tokens específicos de acento do próprio preset.
- */
+// Monta um Theme completo combinando o preset de accent escolhido com os
+// neutros gerados a partir do matiz desse accent.
 export function criarTema(modo: 'light' | 'dark', preset: AccentPreset): Theme {
-  // Matiz sempre tirado da versão clara do preset — claro e escuro do
-  // mesmo preset já são desenhados pra ser a mesma família de cor, então
-  // não precisa (nem deve) recalcular por modo.
   const { h: matiz } = hexParaHsl(preset.light.accent);
   const intensidade = preset.id === 'grafite' ? 0.15 : 1;
   const neutros = gerarNeutros(matiz, modo, intensidade);
@@ -482,69 +410,50 @@ export function criarTema(modo: 'light' | 'dark', preset: AccentPreset): Theme {
   };
 }
 
-// Mantidos por compatibilidade — o preset padrão (Bubblegum) nos dois
-// modos, caso algum código externo à árvore de componentes (fora do
-// ThemeProvider) precise de um Theme "de fallback" sem contexto.
 export const lightTheme: Theme = criarTema('light', obterAccentPreset(ACCENT_PRESET_PADRAO_ID));
 export const darkTheme: Theme = criarTema('dark', obterAccentPreset(ACCENT_PRESET_PADRAO_ID));
 
 export type CorTag = {
-  // Cor sólida: usada no traço lateral fino do card e na bolinha/ícone de
-  // identificação. O card fica neutro — a cor da tag é um detalhe, não o
-  // fundo inteiro.
+
   base: string;
-  // Cor de texto/ícone pra usar EM CIMA de `base`.
+
   text: string;
 };
 
-// Sufixo de opacidade (hex) aplicado sobre `base`, reservado hoje só pro
-// fundo do badge/ícone pequeno — não mais pro card inteiro.
-export const TAG_WASH_ALPHA = '1F'; // ~12% de opacidade
+// Sufixo de opacidade (hex) aplicado sobre `base` no fundo/ícone pequeno
+// da tag, deixando a cor mais discreta que o traço/badge sólido.
+export const TAG_WASH_ALPHA = '1F';
 
-// Duas paletas separadas — mesma ordem de matiz nas duas (índice 0 =
-// azul, 1 = verde, etc.), dessaturadas/"jewel" pra não competir com o
-// acento escolhido (que é território exclusivo do accent, seja qual for
-// o preset ativo). Contraste calibrado pro fundo de cada tema.
-//
-// Ordem = roda de cor completa (terracota ~26° até cereja ~350°), 12
-// cores sem buracos grandes de matiz — não mais a ordem avulsa de
-// quando só existiam 6. Cada `text` do modo escuro é calibrado no
-// PRÓPRIO matiz da cor (mesmo `base`, saturação ~55%, luminosidade
-// ~11%) em vez de reaproveitar um tom genérico emprestado de outra
-// paleta — é o que dava aquela sensação de "resíduo" de um tema antigo.
-//
-// Atenção: o índice gravado no banco por tag é a posição neste array —
-// reordenar/inserir aqui muda a cor de tags já existentes. Aceitável
-// nesta fase (app ainda em desenvolvimento), mas não fazer de novo sem
-// avisar depois que houver instalações reais em uso.
+// Paleta de cor das tags (índice = posição neste array, gravado no
+// banco). Reordenar/inserir aqui muda a cor de tags já existentes.
 export const TAG_PALETTE_LIGHT: CorTag[] = [
-  { base: '#A3612E', text: '#FFFFFF' }, // terracota
-  { base: '#8A7325', text: '#FFFFFF' }, // bronze
-  { base: '#5E6A39', text: '#FFFFFF' }, // oliva
-  { base: '#476A3E', text: '#FFFFFF' }, // grama
-  { base: '#4A7A5C', text: '#FFFFFF' }, // verde musgo
-  { base: '#3B6D61', text: '#FFFFFF' }, // jade
-  { base: '#3B5D7A', text: '#FFFFFF' }, // azul petróleo
-  { base: '#494F8D', text: '#FFFFFF' }, // índigo
-  { base: '#6E5A8C', text: '#FFFFFF' }, // ameixa
-  { base: '#6E467C', text: '#FFFFFF' }, // uva
-  { base: '#76335C', text: '#FFFFFF' }, // royal plum
-  { base: '#743943', text: '#FFFFFF' }, // cereja
+  { base: '#A3612E', text: '#FFFFFF' },
+  { base: '#8A7325', text: '#FFFFFF' },
+  { base: '#5E6A39', text: '#FFFFFF' },
+  { base: '#476A3E', text: '#FFFFFF' },
+  { base: '#4A7A5C', text: '#FFFFFF' },
+  { base: '#3B6D61', text: '#FFFFFF' },
+  { base: '#3B5D7A', text: '#FFFFFF' },
+  { base: '#494F8D', text: '#FFFFFF' },
+  { base: '#6E5A8C', text: '#FFFFFF' },
+  { base: '#6E467C', text: '#FFFFFF' },
+  { base: '#76335C', text: '#FFFFFF' },
+  { base: '#743943', text: '#FFFFFF' },
 ];
 
 export const TAG_PALETTE_DARK: CorTag[] = [
-  { base: '#D99A63', text: '#331D08' }, // terracota
-  { base: '#C7B15C', text: '#332B08' }, // bronze
-  { base: '#A6B47E', text: '#232B0D' }, // oliva
-  { base: '#8AB181', text: '#122B0D' }, // grama
-  { base: '#8FC4A0', text: '#0C2414' }, // verde musgo
-  { base: '#85B7AB', text: '#0D2B24' }, // jade
-  { base: '#7FA8C9', text: '#0B1D28' }, // azul petróleo
-  { base: '#9599C6', text: '#0D0F2B' }, // índigo
-  { base: '#B7A2D6', text: '#221A34' }, // ameixa
-  { base: '#B492BF', text: '#240D2B' }, // uva
-  { base: '#E3A9C8', text: '#33121A' }, // royal plum
-  { base: '#C28E97', text: '#2B0D12' }, // cereja
+  { base: '#D99A63', text: '#331D08' },
+  { base: '#C7B15C', text: '#332B08' },
+  { base: '#A6B47E', text: '#232B0D' },
+  { base: '#8AB181', text: '#122B0D' },
+  { base: '#8FC4A0', text: '#0C2414' },
+  { base: '#85B7AB', text: '#0D2B24' },
+  { base: '#7FA8C9', text: '#0B1D28' },
+  { base: '#9599C6', text: '#0D0F2B' },
+  { base: '#B7A2D6', text: '#221A34' },
+  { base: '#B492BF', text: '#240D2B' },
+  { base: '#E3A9C8', text: '#33121A' },
+  { base: '#C28E97', text: '#2B0D12' },
 ];
 
 export function corDaTag(index: number, modo: 'light' | 'dark'): CorTag {
@@ -552,45 +461,37 @@ export function corDaTag(index: number, modo: 'light' | 'dark'): CorTag {
   return paleta[index % paleta.length];
 }
 
-// --- Paleta de tag "acentuada" (item D — opção 2 escolhida) ---
-// Mesmo matiz e luminosidade de TAG_PALETTE_LIGHT/DARK, só com saturação
-// mais alta (+13pp, mesma ordem de índice) — usada SÓ nos elementos
-// pequenos e "de identificação" (a bolinha de 6px do Dashboard, a faixa +
-// ícone do painel de Tags, as bolinhas do seletor de cor), nunca no fundo
-// lavado da pill nem no texto, que continuam na paleta original — é essa
-// diferença de saturação entre os dois usos que evita a tag competir com
-// o acento escolhido em qualquer combinação de preset (ver documento do
-// item D). `text` é reaproveitado da paleta original: como só a
-// saturação muda (luminosidade igual), o contraste calculado pra ela
-// continua válido.
+// Mesma paleta acima, com saturação mais alta — usada só nos elementos
+// pequenos de identificação (bolinha do card, ícone do painel de Tags),
+// pra não competir visualmente com o accent do tema.
 export const TAG_PALETTE_LIGHT_ACENTUADA: CorTag[] = [
-  { base: '#B15F20', text: '#FFFFFF' }, // terracota
-  { base: '#95791A', text: '#FFFFFF' }, // bronze
-  { base: '#63752E', text: '#FFFFFF' }, // oliva
-  { base: '#417533', text: '#FFFFFF' }, // grama
-  { base: '#3D8759', text: '#FFFFFF' }, // verde musgo
-  { base: '#307867', text: '#FFFFFF' }, // jade
-  { base: '#2F5E86', text: '#FFFFFF' }, // azul petróleo
-  { base: '#3B449B', text: '#FFFFFF' }, // índigo
-  { base: '#6B4B9B', text: '#FFFFFF' }, // ameixa
-  { base: '#743989', text: '#FFFFFF' }, // uva
-  { base: '#81285E', text: '#FFFFFF' }, // royal plum
-  { base: '#7F2E3C', text: '#FFFFFF' }, // cereja
+  { base: '#B15F20', text: '#FFFFFF' },
+  { base: '#95791A', text: '#FFFFFF' },
+  { base: '#63752E', text: '#FFFFFF' },
+  { base: '#417533', text: '#FFFFFF' },
+  { base: '#3D8759', text: '#FFFFFF' },
+  { base: '#307867', text: '#FFFFFF' },
+  { base: '#2F5E86', text: '#FFFFFF' },
+  { base: '#3B449B', text: '#FFFFFF' },
+  { base: '#6B4B9B', text: '#FFFFFF' },
+  { base: '#743989', text: '#FFFFFF' },
+  { base: '#81285E', text: '#FFFFFF' },
+  { base: '#7F2E3C', text: '#FFFFFF' },
 ];
 
 export const TAG_PALETTE_DARK_ACENTUADA: CorTag[] = [
-  { base: '#E69956', text: '#331D08' }, // terracota
-  { base: '#D5B94E', text: '#332B08' }, // bronze
-  { base: '#ACC171', text: '#232B0D' }, // oliva
-  { base: '#82BE74', text: '#122B0D' }, // grama
-  { base: '#84CF9C', text: '#0C2414' }, // verde musgo
-  { base: '#78C4B2', text: '#0D2B24' }, // jade
-  { base: '#73A9D5', text: '#0B1D28' }, // azul petróleo
-  { base: '#8A90D1', text: '#0D0F2B' }, // índigo
-  { base: '#B599DF', text: '#221A34' }, // ameixa
-  { base: '#BA87CA', text: '#240D2B' }, // uva
-  { base: '#EAA2C9', text: '#33121A' }, // royal plum
-  { base: '#CD8390', text: '#2B0D12' }, // cereja
+  { base: '#E69956', text: '#331D08' },
+  { base: '#D5B94E', text: '#332B08' },
+  { base: '#ACC171', text: '#232B0D' },
+  { base: '#82BE74', text: '#122B0D' },
+  { base: '#84CF9C', text: '#0C2414' },
+  { base: '#78C4B2', text: '#0D2B24' },
+  { base: '#73A9D5', text: '#0B1D28' },
+  { base: '#8A90D1', text: '#0D0F2B' },
+  { base: '#B599DF', text: '#221A34' },
+  { base: '#BA87CA', text: '#240D2B' },
+  { base: '#EAA2C9', text: '#33121A' },
+  { base: '#CD8390', text: '#2B0D12' },
 ];
 
 export function corDaTagAcentuada(index: number, modo: 'light' | 'dark'): CorTag {
@@ -598,7 +499,4 @@ export function corDaTagAcentuada(index: number, modo: 'light' | 'dark'): CorTag
   return paleta[index % paleta.length];
 }
 
-// Exportado pra o database.ts saber quantas cores existem na hora de
-// auto-atribuir uma cor a uma tag nova (round-robin), sem duplicar o
-// número aqui e lá. As duas paletas têm sempre o mesmo tamanho.
 export const TOTAL_CORES_TAG = TAG_PALETTE_LIGHT.length;

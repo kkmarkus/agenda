@@ -1,11 +1,6 @@
+// Helpers de formatação de data/hora em pt-BR e wrappers pros pickers
+// nativos de data/hora do Android.
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
-
-// MUDANÇA (item 3): extraído de ConfirmScreen.tsx (onde nasceu no item 9.1)
-// pra cá, porque ConfirmMultiplosScreen.tsx precisa do mesmo padrão de
-// picker de data/hora pra editar cada evento extraído — duplicar essas
-// ~50 linhas nas duas telas ia divergir com o tempo (ex: uma corrigir um
-// bug do outro lado sem lembrar de replicar). ConfirmScreen.tsx foi
-// atualizada pra importar daqui em vez de manter sua própria cópia.
 
 export function formatarData(data?: Date): string {
   if (!data) return '';
@@ -21,36 +16,26 @@ export function formatarHora(data?: Date): string {
   return `${hh}:${min}`;
 }
 
-// Helpers puros de combinação de data/hora — um DateTimePicker em modo
-// 'date' só devolve a parte de dia/mês/ano (a hora que ele devolve junto é
-// lixo/meia-noite, dependendo da implementação nativa), e o modo 'time' só
-// devolve hora/minuto. Por isso sempre combinamos o pedaço novo com o
-// valor atual, em vez de substituir o `Date` inteiro.
+// Troca só o dia/mês/ano de `base`, mantendo a hora que já estava nela.
 export function combinarDataEHora(base: Date, novaData: Date): Date {
   const resultado = new Date(base);
   resultado.setFullYear(novaData.getFullYear(), novaData.getMonth(), novaData.getDate());
   return resultado;
 }
 
+// Troca só a hora/minuto de `base`, mantendo o dia/mês/ano que já estava nela.
 export function combinarComHora(base: Date, novaHora: Date): Date {
   const resultado = new Date(base);
   resultado.setHours(novaHora.getHours(), novaHora.getMinutes(), 0, 0);
   return resultado;
 }
 
-// API imperativa do @react-native-community/datetimepicker
-// (`DateTimePickerAndroid.open`) em vez da API de componente — é a
-// recomendada pela própria documentação da lib pro Android (abre/fecha um
-// diálogo nativo sozinha, sem precisar de estado extra tipo "mostrarPicker"
-// pra controlar visibilidade), e o app já é Android-only por decisão
-// anterior (ver comentário em calendarService.ts sobre isLocalAccount).
-// `event.type === 'set'` é o Android avisando que ela confirmou uma opção
-// (em vez de cancelar o diálogo) — só aí aplicamos a mudança.
 export function abrirDatePicker(valorAtual: Date, aoSelecionar: (novaData: Date) => void): void {
   DateTimePickerAndroid.open({
     value: valorAtual,
     mode: 'date',
     onChange: (evento, novaData) => {
+      // type === 'set': usuário confirmou (não cancelou o picker).
       if (evento.type === 'set' && novaData) aoSelecionar(novaData);
     },
   });

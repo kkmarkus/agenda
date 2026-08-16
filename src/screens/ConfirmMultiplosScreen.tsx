@@ -4,22 +4,40 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { pedirPermissao, criarEventoNaAgenda } from '../services/calendarService';
-import { salvarRegistro, listarTagsUnicas, listarCoresDeTags } from '../services/database';
+import {
+  salvarRegistro,
+  listarTagsUnicas,
+  listarCoresDeTags,
+  lerDuracaoEAntecedenciaPadrao as lerPreferenciasPadrao,
+} from '../services/database';
 import { NovoEvento } from '../types/event';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme/ThemeContext';
 import { corDaTag } from '../theme/theme';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { formatarData, formatarHora, combinarDataEHora, combinarComHora, abrirDatePicker, abrirTimePicker } from '../utils/dataHora';
+import { criarEstilosConfirmacaoCompartilhados } from './estilosConfirmacaoCompartilhados';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ConfirmarMultiplos'>;
 
-// MUDANÇA (item 3): estado local de cada card da lista — nasce a partir de
-// um EventoExtraido (vindo do parser), mas ganha campos que o parser não
-// tem: se está marcado pra confirmar, se o card está expandido, e as tags
-// (o parser nunca sugere tag — isso é uma decisão dela, não algo extraído
-// do texto). `chaveId` é só um id local estável pra key/list, não se
-// relaciona a nada do banco (esses eventos ainda nem existem lá).
+// Lê a mesma duração/antecedência padrão configurada em Ajustes que o
+// fluxo de evento único usa (`useDuracaoEAlarme`), convertendo pros
+// minutos que `NovoEvento` espera. Sem isso, o lote caía sempre nos
+// fallbacks fixos (60min / 30min) do `calendarService`, ignorando o que
+// o usuário configurou.
+function lerDuracaoEAntecedenciaPadrao(): {
+  duracaoMinutos?: number;
+  antecedenciaAlarmeMinutos?: number;
+} {
+  const { duracaoPadrao, antecedenciaPadrao } = lerPreferenciasPadrao();
+  return {
+    duracaoMinutos: duracaoPadrao ? Number(duracaoPadrao) : undefined,
+    antecedenciaAlarmeMinutos: antecedenciaPadrao ? Number(antecedenciaPadrao) : undefined,
+  };
+}
+
+// Estado local editável de cada card, derivado do que o parser extraiu —
+// o usuário pode revisar/corrigir antes de confirmar em lote.
 interface ItemMultiplo {
   chaveId: string;
   incluido: boolean;
@@ -40,10 +58,7 @@ export default function ConfirmMultiplosScreen({ navigation, route }: Props) {
       incluido: true,
       expandido: false,
       titulo: e.titulo,
-      // Um evento só entra nessa lista se `parseMultiplosEventos` já
-      // confirmou que ele tem `data` ou `dataFim` (ver eventParser.ts) —
-      // então o `?? new Date()` aqui é só pra satisfazer o TypeScript
-      // (Date | null), nunca deveria de fato cair no fallback.
+
       data: e.data ?? new Date(),
       tags: [],
     }))
@@ -97,14 +112,9 @@ export default function ConfirmMultiplosScreen({ navigation, route }: Props) {
     setNovaTagPorItem((atual) => ({ ...atual, [item.chaveId]: '' }));
   }
 
-  /**
-   * Salva em lote — chama `criarEventoNaAgenda` + `salvarRegistro` pra
-   * cada item marcado, um de cada vez (não em paralelo: escrever vários
-   * eventos ao mesmo tempo na agenda nativa por engano em caso de erro no
-   * meio do lote é mais difícil de raciocinar do que uma falha sequencial
-   * clara, e o volume aqui — uma lista de avisos colados — nunca é grande
-   * o bastante pra latência sequencial importar de verdade).
-   */
+  // Cria os eventos um de cada vez (não em paralelo) e cada um já vai
+  // pra agenda + banco assim que criado: se algum falhar no meio, os
+  // anteriores já criados continuam válidos em vez de serem perdidos.
   async function handleConfirmarTodos() {
     if (selecionados.length === 0) return;
 
@@ -122,18 +132,23 @@ export default function ConfirmMultiplosScreen({ navigation, route }: Props) {
         return;
       }
 
+      const { duracaoMinutos, antecedenciaAlarmeMinutos } = lerDuracaoEAntecedenciaPadrao();
+
       for (const item of selecionados) {
         const evento: NovoEvento = {
           titulo: item.titulo.trim(),
           data: item.data,
           tags: item.tags,
+          duracaoMinutos,
+          antecedenciaAlarmeMinutos,
         };
         const nativeEventId = await criarEventoNaAgenda(evento);
         salvarRegistro(nativeEventId, item.tags);
       }
 
       navigation.navigate('Dashboard');
-    } catch {
+    } catch (erro) {
+      console.error('Erro ao salvar eventos em lote:', erro);
       setAviso({
         titulo: 'Erro ao salvar',
         mensagem: 'Não foi possível salvar todos os eventos. Os que já foram criados continuam na sua agenda — tente de novo pro restante.',
@@ -351,9 +366,9 @@ export default function ConfirmMultiplosScreen({ navigation, route }: Props) {
 
 function criarStyles(theme: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
+    ...criarEstilosConfirmacaoCompartilhados(theme),
     container: { flex: 1, backgroundColor: theme.colors.background, padding: theme.spacing.lg },
     headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.spacing.sm, marginBottom: theme.spacing.xs },
-    overline: { ...theme.typography.overline, color: theme.colors.accent },
     titulo: { ...theme.typography.heading, fontSize: 20, color: theme.colors.textPrimary, marginTop: 2 },
     subtitulo: {
       ...theme.typography.body,
@@ -361,9 +376,7 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       marginBottom: theme.spacing.md,
       lineHeight: 20,
     },
-    // MUDANÇA (item 3): reaproveita a mesma base visual dos cards do
-    // Dashboard (traço lateral colorido + fundo elevado + sombra) — ver
-    // `card`/`faixa` em DashboardScreen.tsx.
+
     card: {
       flexDirection: 'row',
       alignItems: 'stretch',
@@ -374,8 +387,7 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       overflow: 'hidden',
       marginBottom: theme.spacing.sm + 2,
     },
-    // Desmarcado (não vai ser confirmado): opacidade reduzida no card
-    // inteiro, mesma linguagem visual usada em botões desabilitados.
+
     cardExcluido: { opacity: 0.5 },
     faixa: { width: 6 },
     cardConteudo: { flex: 1, padding: theme.spacing.md },
@@ -394,10 +406,6 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       marginBottom: theme.spacing.sm + 2,
       backgroundColor: theme.colors.surface,
     },
-    inputPressable: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    inputPressableTexto: { ...theme.typography.body, color: theme.colors.textPrimary },
-    linhaDupla: { flexDirection: 'row', gap: theme.spacing.sm },
-    inputMetade: { flex: 1 },
     chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.xs, marginBottom: theme.spacing.sm },
     chip: {
       flexDirection: 'row',
@@ -410,11 +418,7 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       borderColor: theme.colors.border,
       backgroundColor: theme.colors.surface,
     },
-    chipSelecionado: { borderColor: theme.colors.accent, backgroundColor: theme.colors.accentSoft },
-    chipBolinha: { width: 7, height: 7, borderRadius: 4 },
-    chipTexto: { ...theme.typography.caption, color: theme.colors.textSecondary },
     chipTextoSelecionado: { color: theme.colors.textPrimary },
-    linhaAdicionarTag: { flexDirection: 'row', gap: theme.spacing.sm, alignItems: 'flex-start' },
     inputAdicionarTag: { flex: 1 },
     botaoAdicionarTag: {
       width: 42,
@@ -441,6 +445,5 @@ function criarStyles(theme: ReturnType<typeof useTheme>) {
       shadowOffset: { width: 0, height: theme.glow.offsetY },
       elevation: 4,
     },
-    botaoPrincipalTexto: { ...theme.typography.bodyMedium, color: theme.colors.accentText },
   });
 }

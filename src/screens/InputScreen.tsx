@@ -9,40 +9,27 @@ import { useTheme } from '../theme/ThemeContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Input'>;
 
-// MUDANÇA: removido o modo "formulário" a pedido — a tela agora só tem
-// texto livre. A extração ainda é feita pelo parser de regras
-// (eventParser.ts); a troca por uma API de IA fica pra depois, sem
-// precisar mexer nesta tela (ela só chama parseTextoLivre e segue pra
-// confirmação, então trocar a implementação por trás é transparente aqui).
 export default function InputScreen({ navigation }: Props) {
   const theme = useTheme();
   const [textoLivre, setTextoLivre] = useState('');
   const [focado, setFocado] = useState(false);
 
+  // Se o parser reconhecer mais de um evento no texto (lista ou
+  // parágrafo com várias datas), vai pra tela de confirmação em lote em
+  // vez da tela de confirmação de evento único.
   function handleAnalisarTexto() {
     if (!textoLivre.trim()) return;
 
-    // MUDANÇA (item 3): `parseMultiplosEventos` reconhece listas (com ou
-    // sem marcador) e parágrafos corridos com mais de uma data solta — pra
-    // um texto normal com um compromisso só, ela devolve exatamente um
-    // item, igual `parseTextoLivre` faria sozinha.
     const extraidos = parseMultiplosEventos(textoLivre);
 
     if (extraidos.length > 1) {
-      // Mais de um evento detectado: tela de revisão em lote, um card por
-      // evento — não pula direto pra ConfirmScreen (que só sabe editar um
-      // de cada vez) pra não obrigá-la a repetir o fluxo inteiro N vezes.
       navigation.navigate('ConfirmarMultiplos', { eventos: extraidos });
       return;
     }
 
-    // 0 ou 1 evento detectado: segue o fluxo normal de sempre, sem
-    // introduzir uma tela extra pro caso comum (evento único). Com 0
-    // detectados, ainda assim vale a pena tentar `parseTextoLivre` no
-    // texto inteiro — ela pode ter escrito algo que nem `parseTextoLivre`
-    // nem a heurística de múltiplos reconheceram como data, e completa
-    // manualmente na ConfirmScreen (o app nunca trava o fluxo por falha
-    // de extração).
+    // Só achou 0 ou 1 evento na análise de múltiplos: refaz como texto
+    // único pra garantir o resultado mais completo (ex: reconhece
+    // intervalo, que a análise de múltiplos não tenta separar).
     const extraido = extraidos[0] ?? parseTextoLivre(textoLivre);
 
     navigation.navigate('Confirmar', {

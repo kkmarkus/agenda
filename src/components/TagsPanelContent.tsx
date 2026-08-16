@@ -1,3 +1,6 @@
+// Painel de gerenciamento de tags: lista tags em uso com contagem de
+// eventos, permite trocar cor, renomear (ou mesclar com outra tag
+// existente) e apagar.
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
@@ -14,29 +17,13 @@ import { corDaTag, corDaTagAcentuada, TAG_WASH_ALPHA } from '../theme/theme';
 import TagColorPicker from './TagColorPicker';
 import ConfirmDialog from './ConfirmDialog';
 
-// MUDANÇA (item 7): mesmo conteúdo que antes vivia em TagsScreen.tsx,
-// extraído pra um componente sem depender de NativeStackScreenProps nem de
-// navegação — chama as mesmas funções de database.ts de sempre, só que
-// agora renderizado dentro de um SlidePanel empilhado em vez de uma tela
-// cheia. `useFocusEffect` (que dependia do ciclo de vida de uma rota) virou
-// um `useEffect` de montagem simples: como o componente só existe enquanto
-// o painel está aberto, montar de novo a cada abertura já cobre o caso de
-// "uma tag nova pode ter sido criada desde a última visita".
-//
-// CORREÇÃO (remoção do botão de voltar): saía junto do "arrow-left" que
-// havia no cabeçalho — sair deste painel agora depende só do backdrop ou
-// do voltar nativo do Android (ver `fecharUmNivel` em SettingsDrawer.tsx),
-// então este componente não precisa mais de uma prop de navegação própria.
 export default function TagsPanelContent() {
   const theme = useTheme();
   const styles = useMemo(() => criarStyles(theme), [theme]);
   const [tags, setTags] = useState<{ tag: string | null; total: number }[]>([]);
   const [coresPorTag, setCoresPorTag] = useState<Record<string, number>>({});
   const [tagEmEdicao, setTagEmEdicao] = useState<string | null>(null);
-  // MUDANÇA (9.2): separado de tagEmEdicao pra poder mostrar o
-  // ConfirmDialog destrutivo DEPOIS de fechar o TagColorPicker — dois
-  // modais abertos ao mesmo tempo (um por cima do outro) funcionaria, mas
-  // fica visualmente mais limpo fechar um antes de abrir o outro.
+
   const [tagParaApagar, setTagParaApagar] = useState<string | null>(null);
 
   useEffect(() => {
@@ -48,29 +35,53 @@ export default function TagsPanelContent() {
     setCoresPorTag(listarCoresDeTags());
   }
 
+  // Fallback pro índice da posição na lista se a tag ainda não tiver cor
+  // salva (não deveria acontecer em uso normal, já que toda tag nova
+  // recebe cor automaticamente — é só uma proteção extra).
   function corIndexDe(tag: string, indiceNaLista: number): number {
     return coresPorTag[tag.trim().toLowerCase()] ?? indiceNaLista;
   }
 
-  function handleTrocarCor(corIndex: number) {
+  // Se o nome mudou junto da cor (TagColorPicker manda os dois de uma
+  // vez), trata como mesclagem/renome — senão só troca a cor.
+  //
+  // Importante: se o novo nome já existe como outra tag, isso é uma
+  // MESCLAGEM (não uma renomeação), e a cor da tag de destino (a que já
+  // existia) deve prevalecer — não a cor que o usuário tinha acabado de
+  // selecionar pra tag de origem. `renomearOuMesclarTag` já decide isso
+  // corretamente internamente; aqui só evitamos sobrescrever esse
+  // resultado chamando `definirCorDaTag` por cima quando for mesclagem.
+  function handleTrocarCor(corIndex: number, novoNomeSeAlterado?: string) {
     if (!tagEmEdicao) return;
+
+    if (novoNomeSeAlterado) {
+      const chaveDestino = novoNomeSeAlterado.trim().toLowerCase();
+      const ehMesclagem = coresPorTag[chaveDestino] !== undefined && chaveDestino !== tagEmEdicao.trim().toLowerCase();
+
+      renomearOuMesclarTag(tagEmEdicao, novoNomeSeAlterado);
+      if (!ehMesclagem) {
+        definirCorDaTag(novoNomeSeAlterado, corIndex);
+      }
+      setTagEmEdicao(null);
+      carregar();
+      return;
+    }
+
     definirCorDaTag(tagEmEdicao, corIndex);
     setCoresPorTag((atual) => ({ ...atual, [tagEmEdicao.trim().toLowerCase()]: corIndex }));
     setTagEmEdicao(null);
   }
 
-  // MUDANÇA (9.2): renomear (ou, se o nome novo já existir, mesclar
-  // automaticamente com a tag existente — ver renomearOuMesclarTag).
   function handleRenomear(novoNome: string) {
     if (!tagEmEdicao) return;
     renomearOuMesclarTag(tagEmEdicao, novoNome);
     setTagEmEdicao(null);
-    carregar(); // recarrega contagens/cores do zero: mesclagem pode ter reduzido o total de tags
+    carregar();
   }
 
   function handleSolicitarApagar() {
     if (!tagEmEdicao) return;
-    // Fecha o picker de cor e abre a confirmação destrutiva em seu lugar.
+
     setTagParaApagar(tagEmEdicao);
     setTagEmEdicao(null);
   }
@@ -136,9 +147,7 @@ export default function TagsPanelContent() {
           showsVerticalScrollIndicator={false}
           renderItem={({ item, index }) => {
             const cor = corDaTag(corIndexDe(item.tag, index), theme.mode);
-            // CORREÇÃO (item D — opção 2): a faixa lateral e o ícone (glifo)
-            // usam a versão mais saturada — o fundo lavado do círculo do
-            // ícone continua vindo de `cor` (paleta original).
+
             const corAcentuada = corDaTagAcentuada(corIndexDe(item.tag, index), theme.mode);
             return (
               <Pressable

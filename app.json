@@ -1,18 +1,22 @@
 {
   "expo": {
-    "name": "Agenda App",
+    "name": "Agenda",
     "slug": "agenda-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon/icon.png",
     "android": {
       "package": "com.markus.agendaapp",
       "permissions": [
-        "READ_CALENDAR",
-        "WRITE_CALENDAR",
         "android.permission.READ_CALENDAR",
         "android.permission.WRITE_CALENDAR"
-      ]
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon/adaptive-icon-foreground.png",
+        "backgroundColor": "#4C4842"
+      },
+      "edgeToEdgeEnabled": true
     },
     "plugins": [
       [
@@ -46,7 +50,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "5a19f87e-b087-4a88-9858-bea32bca424d"
+        "projectId": ""
       }
     }
   }

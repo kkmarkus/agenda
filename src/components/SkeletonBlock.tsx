@@ -1,10 +1,9 @@
+// Placeholder de carregamento com um "pulsar" de opacidade em loop,
+// usado no lugar de conteúdo ainda não carregado (skeleton screen).
 import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, ViewStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
 
-// Skeleton simples com pulsação via Animated.loop — sem lib extra.
-// Usado no DashboardScreen enquanto os eventos ainda estão sendo
-// buscados na agenda nativa, no lugar da tela em branco de antes.
 export default function SkeletonBlock({ style }: { style?: ViewStyle }) {
   const theme = useTheme();
   const opacidade = useRef(new Animated.Value(0.4)).current;

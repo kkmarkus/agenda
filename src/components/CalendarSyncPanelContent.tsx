@@ -1,3 +1,6 @@
+// Painel de configurações: escolhe quais calendários do dispositivo têm
+// seus eventos importados automaticamente pro Dashboard (ver
+// useCarregarEventos.sincronizarCalendariosExternos).
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
@@ -18,13 +21,6 @@ import { useTheme } from '../theme/ThemeContext';
 import SkeletonBlock from './SkeletonBlock';
 import ConfirmDialog from './ConfirmDialog';
 
-// MUDANÇA (item 7): mesmo conteúdo que antes vivia em CalendarSyncScreen.tsx,
-// extraído pra um componente sem navegação própria — ver comentário
-// equivalente em TagsPanelContent.tsx sobre a troca de useFocusEffect por
-// um useEffect de montagem simples.
-//
-// CORREÇÃO (remoção do botão de voltar): ver comentário equivalente em
-// TagsPanelContent.tsx — sair depende só do backdrop ou do voltar nativo.
 export default function CalendarSyncPanelContent() {
   const theme = useTheme();
   const styles = useMemo(() => criarStyles(theme), [theme]);
@@ -33,10 +29,7 @@ export default function CalendarSyncPanelContent() {
   const [ativos, setAtivos] = useState<Record<string, boolean>>({});
   const [carregando, setCarregando] = useState(true);
   const [semPermissao, setSemPermissao] = useState(false);
-  // MUDANÇA (9.4): quando ela desativa um calendário que já estava
-  // sincronizado, guardamos aqui os registros locais que vieram dele (sem
-  // tag, com native_event_id ainda presente nesse calendário) — só até ela
-  // decidir, no ConfirmDialog, se quer removê-los do app ou mantê-los.
+
   const [calendarioParaLimpar, setCalendarioParaLimpar] = useState<{
     titulo: string;
     registros: RegistroEvento[];
@@ -65,24 +58,16 @@ export default function CalendarSyncPanelContent() {
     setCarregando(false);
   }
 
-  /**
-   * MUDANÇA (9.4): ao DESATIVAR (não ao ativar) um calendário, checa se
-   * existem eventos locais importados dele — sem tag (sinal de que vieram
-   * da sincronização automática, não de um evento que ela classificou à
-   * mão) e cujo id nativo ainda pertence a esse calendário — e, se houver,
-   * pergunta se ela quer removê-los do Dashboard. A sincronização em si só
-   * ADICIONA eventos novos (ver DashboardScreen); sem essa oferta, os já
-   * importados ficariam pra sempre mesmo depois de desativado o calendário.
-   * Reaproveita `listarRegistros` + `apagarRegistro` — não mexe na agenda
-   * nativa (o evento é dela, não do app; só o registro local é removido).
-   */
+  // Ao DESativar um calendário, oferece apagar do app os eventos que já
+  // tinham sido importados dele (só os sem tag — se o usuário deu uma
+  // tag, entende-se que já "adotou" aquele evento e não some sozinho).
   async function alternar(calendarId: string, titulo: string) {
     const eraAtivo = !!ativos[calendarId];
     const novoValor = !eraAtivo;
     definirSincronizacaoDoCalendario(calendarId, novoValor);
     setAtivos((atual) => ({ ...atual, [calendarId]: novoValor }));
 
-    if (!eraAtivo || novoValor) return; // só interessa a transição ativo -> inativo
+    if (!eraAtivo || novoValor) return;
 
     try {
       const idsDoCalendario = await buscarNativeEventIdsDoCalendario(calendarId);
@@ -92,10 +77,10 @@ export default function CalendarSyncPanelContent() {
       if (registrosImportados.length > 0) {
         setCalendarioParaLimpar({ titulo, registros: registrosImportados });
       }
-    } catch {
-      // Se a busca falhar (ex: permissão revogada nesse meio-tempo), a
-      // desativação da sincronização já aconteceu normalmente acima — só
-      // não oferecemos a limpeza em lote dessa vez.
+    } catch (erro) {
+      // Se a busca falhar, não oferece a limpeza em lote dessa vez — os
+      // registros continuam no app normalmente, sem risco de dado perdido.
+      console.error('Erro ao buscar eventos importados do calendário:', erro);
     }
   }
 
